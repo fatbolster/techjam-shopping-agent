@@ -1,0 +1,20 @@
+# Pinned per §8.0: "Pinned requirements.txt; one command to set up.
+# Version drift across five machines is a predictable time sink."
+#
+# Runtime (Index 2/6, §3.2/§3.4 Step 6)
+numpy==1.26.4
+scikit-learn==1.4.2
+sentence-transformers==2.7.0
+torch==2.2.2
+
+# Optional pairwise-objective comparison (§6.6 "Objective function", §8.3 step C6)
+lightgbm==4.3.0
+
+# Analysis (§8.0: ablation tables, slice plots, feature distributions)
+pandas==2.2.2
+jupyter==1.0.0
+
+# Dev tooling (§8.0)
+pytest==8.2.0
+ruff==0.4.4
+black==24.4.2
