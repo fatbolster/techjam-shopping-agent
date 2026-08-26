@@ -37,7 +37,7 @@ class Candidate:
             not surfaced by the semantic stream.
         sources: Which stream(s) contributed this candidate, e.g.
             {"keyword"}, {"semantic", "popularity"}. Diagnostic only, feeds
-            §6.2's per-stream recall reporting (Owner Marcus, step D7).
+            §6.2's per-stream recall reporting (Owner Chellappan, step D7).
     """
 
     asin: str

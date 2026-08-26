@@ -4,7 +4,7 @@ Design doc §3.4 Step 5 (Clarification decision): "score(a) =
 P(answerable | a) x H(a), H(a) = -Sum_v p(v) log2 p(v). Ask about argmax if
 the score clears a threshold."
 
-Owner: Chellpapan (Evaluation and integration). §8.5, step E4 ("Answerability priors
+Owner: Marcus (Evaluation and integration). §8.5, step E4 ("Answerability priors
 initialised by judgement, then re-estimated from D8 transcripts. Per-session
 cap on clarifications.").
 
@@ -73,7 +73,7 @@ def score_attribute(attribute: str, pool: list[Candidate], state: SessionState) 
 
     Design doc §3.4 Step 5: "Weighting by answerability inverts the
     ranking correctly: category 2.84, department 1.67, brand 0.73."
-    Chellpapan, step E4.
+    Marcus, step E4.
 
     STUB: computes real entropy over a fixture value distribution (not the
     real per-candidate attribute values, since facts lookups here are

@@ -18,7 +18,7 @@ whatever it is given, it does not increment its own; and (2) a single
 Agent instance serves many concurrent sessions, so state is a
 session_id -> SessionState map, not one SessionState field.
 
-Owner: Chellpapan (Evaluation and integration). §8.5, step E1 (repo skeleton,
+Owner: Marcus (Evaluation and integration). §8.5, step E1 (repo skeleton,
 BLOCKING), step E2 (BLOCKING — "Wire stubs into a runnable Agent ... End-to-
 end run with fixture data before any component is real."), step E8
 (integrate modules, keep main green).

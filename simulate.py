@@ -3,7 +3,7 @@
 Design doc §6.5.2 (Fallback: a self-built user simulator) and §7.2
 interface contract `simulate_turn(session, history) -> str`.
 
-Owner: Marcus (Simulator and training corpus). §8.4, step D3 (facet extractor
+Owner: Chellappan (Simulator and training corpus). §8.4, step D3 (facet extractor
 over target records), step D4 (BLOCKING — the simulator itself), step D5
 (clarification answering).
 
@@ -33,7 +33,7 @@ def extract_target_facets(target_record: dict) -> dict[str, str]:
     Design doc §6.5.2: "Each session gives the target ASIN, and the
     catalogue gives that product's full record ... Turn content is drawn
     from the target's own attributes, released progressively rather than
-    all at once." Owner Marcus, §8.4 step D3.
+    all at once." Owner Chellappan, §8.4 step D3.
 
     STUB: returns a fixture facet dict tagged with the target's ASIN,
     rather than parsing `target_record`'s categories/details fields.
@@ -81,7 +81,7 @@ def answer_clarification(session: dict, attribute: str) -> str:
     Design doc §6.5.2: "When ask_attribute is set, the simulator answers
     from the target's record if it carries that attribute, and replies 'no
     preference' otherwise — which is what makes the answerability prior in
-    Step 5 measurable." Owner Marcus, §8.4 step D5.
+    Step 5 measurable." Owner Chellappan, §8.4 step D5.
 
     STUB: always returns "no preference", never inspecting whether the
     target record actually carries `attribute`.

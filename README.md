@@ -6,7 +6,7 @@ what the user said, vector state for what the user meant.
 Full design rationale, data measurements, and the delivery plan live in
 [`docs/Shopping-Copilot-Technical-Design.pdf`](docs/Shopping-Copilot-Technical-Design.pdf).
 This README is the assembled, per-owner summary (§7.1, §8.5.1: "each owner
-writes their own README section ... Chellpapan merges").
+writes their own README section ... Marcus merges").
 
 **Status:** scaffold only. Every module is stubbed to its final signature
 and returns fixture data — see each file's module docstring for what it
@@ -81,7 +81,7 @@ pairwise-objective comparison, the flagged LLM rerank (§8.3).*
 - **How to verify:**
 - **Known limitations:**
 
-## Marcus — Simulator and training corpus
+## Chellappan — Simulator and training corpus
 
 *Lane: the user simulator (if required), telemetry logging, instrumented
 runs, and feature-matrix generation (§8.4). On the critical path — no
@@ -93,7 +93,7 @@ corpus.*
 - **How to verify:**
 - **Known limitations:**
 
-## Chellpapan — Evaluation and integration
+## Marcus — Evaluation and integration
 
 *Lane: the clarification policy, the ablation harness, threshold tuning,
 module wiring, repository health (§8.5). Owns `main`.*

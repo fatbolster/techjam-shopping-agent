@@ -2,7 +2,7 @@
 
 Design doc §6.3 (Ablation protocol) and §6.4 (Slicing).
 
-Owner: Chellpapan (Evaluation and integration). §8.5, step E5 ("Config flags +
+Owner: Marcus (Evaluation and integration). §8.5, step E5 ("Config flags +
 evaluator. Feature ablations re-score logged candidates without re-running
 retrieval; stream and filter ablations trigger a full pass."), step E6
 ("Populate the ablation table; slice by scenario_type.").
@@ -61,7 +61,7 @@ def run_ablation(config_name: str, sessions: list[dict]) -> AblationResult:
     """Score one ablation configuration over the given sessions.
 
     Design doc §6.3: "Each configuration is run over all 200 public
-    sessions and scored with the supplied evaluator." Owner Chellpapan, step E5.
+    sessions and scored with the supplied evaluator." Owner Marcus, step E5.
 
     STUB: does not run the evaluator or re-score anything; returns fixture
     metrics tagged with `config_name` and the session count.
@@ -108,7 +108,7 @@ def run_all_ablations(sessions: list[dict]) -> list[AblationResult]:
     """Run every configuration in ABLATION_CONFIGS and collect results.
 
     Design doc §6.3: "Nine configurations x four metrics, plus four
-    slices. The core evidence in the writeup." Owner Chellpapan, step E6.
+    slices. The core evidence in the writeup." Owner Marcus, step E6.
 
     Args:
         sessions: The public sessions to score over.

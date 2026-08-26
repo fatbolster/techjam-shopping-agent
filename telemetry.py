@@ -2,7 +2,7 @@
 
 Design doc §3.4 Step 7 (Telemetry) and §3.3 ("Telemetry log ... Append-only").
 
-Owner: Marcus (Simulator and training corpus). §8.4, step D2 ("Logs state,
+Owner: Chellappan (Simulator and training corpus). §8.4, step D2 ("Logs state,
 canonical intent string, pool sizes, and whether the target was in the
 pool. Labels joined offline by session_id; ground truth never reaches
 respond()."), step D6 (produce the ~4,200-row feature matrix), step D7
@@ -47,7 +47,7 @@ def log_turn(
     candidates) -> None`. §3.4 Step 7: "Records session_id, turn, track,
     canonical intent string, pool size before and after filtering,
     ask_attribute, whether the target was present in the pool, and the ten
-    feature values per candidate." Owner Marcus, step D2.
+    feature values per candidate." Owner Chellappan, step D2.
 
     Ground truth is never passed into respond() (§3.4 Step 7); the
     `target_in_pool` boolean is computed by the *caller* offline or during
@@ -101,7 +101,7 @@ def read_telemetry(path: str = DEFAULT_TELEMETRY_PATH) -> list[dict]:
 
     Design doc §6.5 ("training data for the ranker must be produced by an
     instrumented run rather than read from disk") and §6.6 step 2.
-    Marcus, supports step D6/D7.
+    Chellappan, supports step D6/D7.
 
     STUB: reads whatever is actually on disk at `path`; returns an empty
     list if the file does not exist, rather than raising.
@@ -124,7 +124,7 @@ def build_training_rows(telemetry_rows: list[dict], ground_truth: dict[str, str]
     Design doc §6.6 Ranker training protocol, steps 2-4: "Each turn logs
     one row per candidate ... Join ground_truth offline by session_id to
     assign labels ... Sample ~20 negatives per session from the candidate
-    pool, not from the catalogue at large." Owner Marcus, step D6 (BLOCKING —
+    pool, not from the catalogue at large." Owner Chellappan, step D6 (BLOCKING —
     "~4,200 labelled rows delivered to C").
 
     STUB: joins for real (a simple dict lookup + list comprehension, not a
