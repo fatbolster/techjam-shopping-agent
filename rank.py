@@ -7,7 +7,9 @@ logistic regression on D6's matrix, GroupKFold by session_id), step C6
 (optional pairwise objective comparison), step C7 (flagged LLM rerank with
 defensive parsing).
 
-Everything below is a stub. Function bodies return fixture values only.
+score_candidates()/rank() (C3) do real weighted-sum arithmetic over real
+features.py feature values as of issues #20-#23 (C1-C4). fit_logistic_regression()
+(C5) and llm_rerank() (C7) remain deliberate stubs — out of scope here.
 sklearn is imported lazily inside fit_logistic_regression() so this module
 is importable without the dependency installed (§9: "Pipeline is fully
 functional with zero LLM calls").
@@ -25,8 +27,28 @@ from utils import Candidate
 
 # Hand-set weights, one per FEATURE_NAMES entry (§8.3 step C3: "Constants
 # at module top for single-line tuning. Produces a complete ranking on day
-# one."). Uniform placeholder weights until C3/E7 tune them.
-HANDSET_WEIGHTS: dict[str, float] = {name: 1.0 for name in FEATURE_NAMES}
+# one."). Starting values below (issue #22) are not fit — C5's logistic
+# regression supersedes them once it exists (rank() falls back to these
+# only when no FittedRanker is supplied). Relative magnitudes follow the
+# strength of evidence in §2: pop carries the single strongest documented
+# prior (§2.1: 63%/81%/96% of targets in the top 1%/5%/20% by review
+# count), so it is weighted above the two retrieval-relevance features.
+# rating_style_fit is deliberately small — §2.4.1 measured a real but
+# modest effect (0.131 stars, ~16% of one catalogue IQR) — and price_fit
+# is muted because it is neutral (0.5) for 78.9% of the catalogue (§2.2),
+# so most candidates get no signal from it either way.
+HANDSET_WEIGHTS: dict[str, float] = {
+    "bm25_norm": 1.5,
+    "cos_sim": 1.5,
+    "pop": 2.0,
+    "rating": 1.0,
+    "price_fit": 0.5,
+    "category_match": 1.5,
+    "brand_match": 1.0,
+    "slot_coverage": 1.0,
+    "rare_tag_match": 0.5,
+    "rating_style_fit": 0.3,
+}
 
 TOP_K_RETURN = 10
 TOP_K_TRUNCATE = 30  # §3.4 Step 6: "truncate to 30, optionally rerank with an LLM"

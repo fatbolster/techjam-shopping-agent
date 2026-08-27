@@ -13,6 +13,13 @@ said; `SessionState.profile_terms` is a separate, read-only field.
 
 The B1 schema, B4 clarification lifecycle, B6 scenario assignment, B7
 canonical reconstruction, and B8 deterministic routing are implemented here.
+
+`SessionState.rating_style` (below) is a small addition on top of the B1
+schema, made while implementing C2 (features.py's rating_style_fit, §2.4.1):
+§3.3 lists only slots/scenario_buffer/profile_terms/telemetry, but that
+feature has no other path to the profile's rating_style. It follows the
+same read-only, loaded-once-in-init_state() pattern as profile_terms —
+flag with Qikun if this should live differently.
 """
 
 from __future__ import annotations
@@ -206,6 +213,18 @@ class SessionState:
             only the latest explicitly additive detail, never turn history.
         profile_terms: Rare-tag term list derived once in reset() (§2.4,
             §3.3). Read-only for the lifetime of the session.
+        rating_style: The profile's raw `rating_style` value ("usually
+            positive" / "mixed" / "critical"), or None if absent. Not part
+            of the original §3.3 schema (which lists only slots/
+            scenario_buffer/profile_terms/telemetry) — added for Owner C's
+            rating_style_fit feature (§2.4.1, §8.3 step C2), which has no
+            other way to reach it. Loaded once in init_state() alongside
+            profile_terms; read-only for the same reason: it is measured
+            profile signal, not something the user stated this session.
+            `average_prior_rating` is deliberately not carried anywhere in
+            SessionState — §2.4.1 states it is the same signal as
+            rating_style, and carrying both risks a feature reading the
+            wrong one.
         asked_attributes: Attributes already asked about this session, so
             the clarification policy (clarify.py) does not repeat a
             question (§3.4 Step 5). Uses the evaluator-facing
@@ -232,6 +251,7 @@ class SessionState:
     slot_override_flags: SlotOverrideFlags = field(default_factory=dict)
     scenario_buffer: str = ""
     profile_terms: list[str] = field(default_factory=list)
+    rating_style: Optional[str] = None
     asked_attributes: set[ClarificationAttribute] = field(default_factory=set)
     pending_clarification: Optional[ClarificationAttribute] = None
     override_reference_values: OverrideReferenceValues = field(
@@ -254,8 +274,9 @@ def init_state(session_id: str, user_profile: Optional[dict] = None) -> SessionS
     Args:
         session_id: Identifier for the new session.
         user_profile: The raw profile dict from Agent.reset(), or None.
-            Only measured rare tags are retained in profile_terms; the raw
-            mapping is not session state.
+            Only measured rare tags are retained in profile_terms, plus
+            rating_style verbatim (§2.4.1); the raw mapping itself is not
+            session state.
 
     Returns:
         A new, empty SessionState.
@@ -264,6 +285,7 @@ def init_state(session_id: str, user_profile: Optional[dict] = None) -> SessionS
     return SessionState(
         session_id=session_id,
         profile_terms=derive_profile_terms(user_profile),
+        rating_style=user_profile.get("rating_style"),
     )
 
 
