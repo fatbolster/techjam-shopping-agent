@@ -124,8 +124,16 @@ def rating(candidate: Candidate, facts: dict[str, dict]) -> float:
     return fixture_score("rating:" + candidate.asin)
 
 
+# Strictly interior — never 0.0 or 1.0 — so a missing price (78.9% of the
+# catalogue, §2.2) reads as genuinely uninformative rather than as an
+# implicit worst-possible-fit penalty. Named rather than inlined so the
+# invariant is checkable by name (tests/test_features.py) instead of by
+# grep for a bare "0.5" that could later be confused with a real value.
+PRICE_FIT_NEUTRAL = 0.5
+
+
 def price_fit(candidate: Candidate, facts: dict[str, dict], state: SessionState) -> float:
-    """0.5 when price is null, else fit to stated budget. §2.2, §3.4 Step 6.
+    """PRICE_FIT_NEUTRAL when price is null, else fit to stated budget. §2.2, §3.4 Step 6.
 
     Design doc §2.2: "78.9% of catalogue rows have price: null ... Price is
     therefore a scoring feature with a neutral value for nulls, and never a
@@ -139,11 +147,13 @@ def price_fit(candidate: Candidate, facts: dict[str, dict], state: SessionState)
         state: Current session state (would supply price_min/price_max).
 
     Returns:
-        0.5 if price is null; otherwise a fixture pseudo-score in [0, 1].
+        PRICE_FIT_NEUTRAL if price is null; otherwise a fixture pseudo-score
+        in [0, 1] (the real budget-fit formula is unimplemented — issue #21
+        step 3 scoped only the null-safety branch).
     """
     record = facts.get(candidate.asin)
     if record is None or record.get("price") is None:
-        return 0.5
+        return PRICE_FIT_NEUTRAL
     return fixture_score("price_fit:" + candidate.asin)
 
 
