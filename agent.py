@@ -34,7 +34,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from clarify import pick_attribute
-from extract import update_slots
+from extract import AttributeGazetteer, build_attribute_gazetteer, update_slots
 from indexes import Indexes, build_indexes, embed_text
 from rank import rank
 from retrieval import retrieve
@@ -55,12 +55,15 @@ class Agent:
     """
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
-        """Build the offline indexes once.
+        """Build the offline indexes and attribute gazetteer once.
 
         Design doc §3.2: "Runs once at startup, in roughly 5 seconds plus
         encoding time." §8.5 step E1. Signature and default path match the
         supplied kit's baseline agent exactly, so the evaluator can
         construct this Agent the same way it constructs that one.
+
+        B2's gazetteer is derived from the exact ``Indexes.catalog`` rows,
+        keeping retrieval and extraction on one catalogue representation.
 
         A fitted ranker (§3.4 Step 6, §8.3 step C5) is not threaded through
         the constructor, because the baseline contract has no such
@@ -74,6 +77,9 @@ class Agent:
         """
         self.catalog_path = Path(catalog_path)
         self.indexes: Indexes = build_indexes(load_catalog(str(self.catalog_path)))
+        self.gazetteer: AttributeGazetteer = build_attribute_gazetteer(
+            self.indexes.catalog
+        )
         self.sessions: dict[str, SessionState] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
@@ -83,9 +89,9 @@ class Agent:
             session_id: Identifier for the new session, joined against
                 ground truth offline (§3.4 Step 7) — never used at
                 inference time to look anything up.
-            user_profile: The session's raw profile dict (§2.4/§2.4.1).
+            user_profile: The session's raw profile dict (§2.4).
                 Filtered into `profile_terms` by state.derive_profile_terms();
-                kept in full for rating_style_fit.
+                the raw mapping is not retained in SessionState.
 
         Returns:
             None.
@@ -122,7 +128,7 @@ class Agent:
         state = self.sessions[session_id]
         state.turn = turn
 
-        update_slots(state, user_message)
+        update_slots(state, user_message, self.gazetteer)
         reconstruct_canonical(state, embed_text)
         track = pick_track(state)
         pool = retrieve(state, track, self.indexes)
