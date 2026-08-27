@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 
-from state import SessionState
+from state import CLARIFICATION_ATTRIBUTES, SessionState
 from utils import Candidate
 
 # Hand-set answerability priors (§3.4 Step 5: "Answerability is initially
@@ -26,17 +26,29 @@ from utils import Candidate
 # Design doc §3.4 Step 5 worked example gives combined scores of category
 # 2.84, department 1.67, brand 0.73 on one real pool; these priors are a
 # fixture placeholder, not derived from that example.
+#
+# Keyed by the evaluator-facing ClarificationAttribute vocabulary (state.py:
+# category/material/color/size/style/brand/budget/feature/use_case/other),
+# not the internal SlotKey vocabulary — pick_attribute()'s return value is
+# handed straight to the evaluator and later fed back through
+# extract.py's _CLARIFICATION_SLOT_MAP, which only recognises
+# ClarificationAttribute keys and raises KeyError on anything else.
+# "department" has no entry: it is useful internally but, per state.py,
+# cannot be requested through this interface at all. "other" (the free-text
+# fallback channel) is also excluded — it is never the *best* question to
+# proactively ask, only a landing spot for an unclassifiable reply.
 ANSWERABILITY_PRIOR: dict[str, float] = {
     "category": 0.9,
-    "department": 0.85,
     "brand": 0.3,
     "color": 0.5,
     "material": 0.5,
     "style": 0.6,
     "size": 0.4,
-    "price_min": 0.4,
-    "price_max": 0.4,
+    "budget": 0.4,
+    "feature": 0.45,
+    "use_case": 0.45,
 }
+assert set(ANSWERABILITY_PRIOR) <= set(CLARIFICATION_ATTRIBUTES)
 
 # Score must clear this threshold to trigger a question (§3.4 Step 5:
 # "Ask about argmax if the score clears a threshold.").
@@ -44,6 +56,28 @@ ASK_THRESHOLD = 1.0
 
 # Per-session cap on clarifications (§3.4 Step 5, §7.4 descoping order #3).
 MAX_CLARIFICATIONS_PER_SESSION = 3
+
+# ANSWERABILITY_PRIOR's keys (ClarificationAttribute) and state.slots' keys
+# (SlotKey) are two different vocabularies (state.py) that mostly, but not
+# entirely, coincide: "budget" maps to three internal slots, not one
+# literally named "budget". Needed so _already_filled() below can check
+# the right internal slot(s) for each externally-askable attribute.
+_ATTRIBUTE_TO_SLOTS: dict[str, tuple[str, ...]] = {
+    "category": ("category",),
+    "brand": ("brand",),
+    "color": ("color",),
+    "material": ("material",),
+    "style": ("style",),
+    "size": ("size",),
+    "budget": ("price_min", "price_max", "price_target"),
+    "feature": ("feature",),
+    "use_case": ("use_case",),
+}
+
+
+def _already_filled(attribute: str, state: SessionState) -> bool:
+    """Whether the user has already stated this attribute, in any form."""
+    return any(state.slots.get(slot) for slot in _ATTRIBUTE_TO_SLOTS.get(attribute, ()))
 
 
 def shannon_entropy(values: list[str]) -> float:
@@ -112,7 +146,11 @@ def pick_attribute(pool: list[Candidate], state: SessionState) -> str | None:
     if len(state.asked_attributes) >= MAX_CLARIFICATIONS_PER_SESSION:
         return None
 
-    candidates = [attr for attr in ANSWERABILITY_PRIOR if attr not in state.slots and attr not in state.asked_attributes]
+    candidates = [
+        attr
+        for attr in ANSWERABILITY_PRIOR
+        if not _already_filled(attr, state) and attr not in state.asked_attributes
+    ]
     if not candidates:
         return None
 

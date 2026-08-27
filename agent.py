@@ -38,7 +38,13 @@ from extract import AttributeGazetteer, build_attribute_gazetteer, update_slots
 from indexes import Indexes, build_indexes, embed_text
 from rank import rank
 from retrieval import retrieve
-from state import SessionState, init_state, pick_track, reconstruct_canonical
+from state import (
+    SessionState,
+    init_state,
+    pick_track,
+    reconstruct_canonical,
+    set_pending_clarification,
+)
 from telemetry import log_turn
 from utils import load_catalog
 
@@ -136,6 +142,13 @@ class Agent:
         ask_attribute = pick_attribute(pool, state)
         if ask_attribute is not None:
             state.asked_attributes.add(ask_attribute)
+            # Record what the *next* incoming turn is answering, so
+            # update_slots() can route it through extract.py's
+            # clarification-context path (requested_attribute) instead of
+            # the generic, context-blind parser. Without this the whole
+            # pending_clarification / consume_pending_clarification wiring
+            # extract.py already implements is unreachable dead code.
+            set_pending_clarification(state, ask_attribute)
 
         ranked_asins = rank(pool, state, self.indexes, top_k=top_k)
 

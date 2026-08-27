@@ -17,6 +17,7 @@ and B6's deterministic scenario-buffer transitions are implemented.
 
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 from collections import Counter, defaultdict
@@ -96,6 +97,7 @@ _MAX_STRUCTURED_VALUE_LENGTH = 80
 _MAX_STRUCTURED_VALUE_TOKENS = 8
 
 
+@functools.lru_cache(maxsize=512)
 def normalize_gazetteer_value(value: str) -> str:
     """Normalize one exact lookup value without splitting it into tokens.
 
@@ -103,6 +105,15 @@ def normalize_gazetteer_value(value: str) -> str:
     punctuation/whitespace folding make catalogue spellings comparable while
     preserving phrase boundaries. Apostrophes are removed so ``men's`` maps
     to the conservative department alias ``mens``.
+
+    Cached: a single extract_slots() call independently recomputes this on
+    the same `message` string up to 4 times (_gazetteer_findings,
+    _semantic_findings, _use_case_findings, _residual_scenario), each
+    paying the full NFKD-fold-and-regex cost on the same input. The cache
+    is pure/hashable-args-only (str -> str, no side effects), so this is
+    safe; bounded size keeps memory flat over a long-running process
+    without needing to thread a precomputed value through four call sites
+    with independent signatures and independent test coverage.
     """
     text = unicodedata.normalize("NFKD", value)
     text = "".join(char for char in text if not unicodedata.combining(char))
@@ -122,6 +133,39 @@ def _safe_structured_value(value: str) -> bool:
         and len(value) <= _MAX_STRUCTURED_VALUE_LENGTH
         and len(normalized.split()) <= _MAX_STRUCTURED_VALUE_TOKENS
     )
+
+
+# Marketing/campaign taxonomy noise that survives _safe_structured_value's
+# length check but is not a real department or category a user would ever
+# state. Verified against data/catalog.jsonl: every one of the 72 distinct
+# categories[] path entries containing a digit, "$", or "%" is a seasonal
+# or promo bucket ("Under $50", "Prime Day: 30% off...", "Toddler Size 6",
+# "Save up to X% on Burt's Bees") — none is a genuine department/category
+# name. The keyword set is kept deliberately short and word-matched (not
+# substring) because the category-path space also legitimately contains
+# thousands of short, rare real category names ("Fedoras", "Cravats",
+# "Tapers") that a broader denylist would risk rejecting.
+_PROMO_NOISE_TOKENS: frozenset[str] = frozenset(
+    {"clearance", "test", "outlet", "markdown", "markdowns"}
+)
+
+
+def _looks_like_promo_noise(canonical: str) -> bool:
+    """True for department/category source strings that are taxonomy noise.
+
+    Checked against `canonical` (pre-normalization) rather than the
+    normalized form, since normalize_gazetteer_value() strips "$"/"%" as
+    non-word characters before this would ever see them.
+
+    Deliberately NOT applied to brand/store or style: 418 distinct real
+    store names in this catalogue contain digits ("7 For All Mankind",
+    "5.11", "Core 10"), so the same filter there would reject legitimate
+    brands rather than noise.
+    """
+    if any(char.isdigit() for char in canonical) or "$" in canonical or "%" in canonical:
+        return True
+    tokens = set(normalize_gazetteer_value(canonical).split())
+    return bool(tokens & _PROMO_NOISE_TOKENS)
 
 
 def _string_values(value: object) -> list[str]:
@@ -168,9 +212,11 @@ def build_attribute_gazetteer(catalog: list[dict]) -> AttributeGazetteer:
         lambda: defaultdict(Counter)
     )
 
-    def add(slot: SlotKey, raw_value: str) -> None:
+    def add(slot: SlotKey, raw_value: str, *, filter_promo_noise: bool = False) -> None:
         canonical = _canonical_text(raw_value)
         if not _safe_structured_value(canonical):
+            return
+        if filter_promo_noise and _looks_like_promo_noise(canonical):
             return
         normalized = normalize_gazetteer_value(canonical)
         counts[slot][normalized][canonical] += 1
@@ -178,9 +224,9 @@ def build_attribute_gazetteer(catalog: list[dict]) -> AttributeGazetteer:
     for row in catalog:
         categories = _string_values(row.get("categories"))
         if len(categories) > 1:
-            add("department", categories[1])
+            add("department", categories[1], filter_promo_noise=True)
         for category in categories:
-            add("category", category)
+            add("category", category, filter_promo_noise=True)
         for store in _string_values(row.get("store")):
             add("brand", store)
         for style in _detail_values(row, "Style"):
@@ -424,6 +470,15 @@ def _budget_findings(message: str, order_offset: int = 0) -> list[_Finding]:
     range_matches = list(_BETWEEN_BUDGET.finditer(message))
     range_matches.extend(_CURRENCY_RANGE.finditer(message))
     for match in range_matches:
+        # NOTE: a reversed range ("$100 to $50") is intentionally stored
+        # verbatim, not swapped — test_owner_b_e2e_audit.py's
+        # test_case_10_malformed_single_utterance_range_is_not_silently_repaired
+        # locks this in explicitly (asserts price_min=100/price_max=50 and
+        # the literal "between $100 and $50" canonical rendering survive
+        # unchanged). An earlier version of this fix auto-swapped the
+        # bounds; that broke this test, so don't reintroduce it without
+        # confirming the repair is actually wanted first — silently
+        # "fixing" the range also silently guesses at what the user meant.
         findings.extend(
             (
                 _Finding(
@@ -650,6 +705,12 @@ def _classify_requirement(
         if canonical is None and slot in {"color", "material"}:
             # A literal attribute label supplies the disambiguation that the
             # deliberately small B2 controlled vocabulary otherwise lacks.
+            # department/category/brand/style deliberately do NOT get this
+            # fallback below — they are strictly catalog-backed (module
+            # docstring), so a gazetteer miss there returns [] rather than
+            # inventing a value. _classify_requested_requirement() applies
+            # this identical color/material-only carve-out to the
+            # clarification-answer path; keep the two in sync.
             canonical = normalize_gazetteer_value(value)
         return (
             [_Finding(slot, canonical, "attribute_label", order)]
@@ -663,13 +724,20 @@ def _classify_requirement(
     size = _size_findings(cleaned, order)
     if size:
         return size
+    # Collect matches across BOTH slots before returning: a single phrase
+    # can legitimately name a material and a color together ("cotton and
+    # black"), and returning on the first non-empty slot silently dropped
+    # whichever slot came second in this tuple's order.
+    material_and_color: list[_Finding] = []
+    next_order = order
     for slot in ("material", "color"):
-        values = _controlled_values(cleaned, gazetteer, slot)
-        if values:
-            return [
-                _Finding(slot, value, "requirement_phrase", order + index)
-                for index, value in enumerate(values)
-            ]
+        for value in _controlled_values(cleaned, gazetteer, slot):
+            material_and_color.append(
+                _Finding(slot, value, "requirement_phrase", next_order)
+            )
+            next_order += 1
+    if material_and_color:
+        return material_and_color
     style = _style_value(cleaned)
     if style is not None:
         return [_Finding("style", style, "requirement_phrase", order)]
@@ -727,8 +795,29 @@ def _classify_requested_requirement(
         return []
     if slot == "size":
         canonical = _canonical_size(normalized)
-    else:
+    elif slot in {"material", "color", "feature", "use_case", "style"}:
+        # These slots tolerate free text beyond the fixed/gazetteer
+        # vocabulary (module docstring: "Color, material, and use-case
+        # values are small evaluator-aligned fixed vocabularies ... because
+        # the corresponding metadata is sparse"). style is included too —
+        # test_extraction.py's requested_attribute="style" case explicitly
+        # expects a reply like "classic" (not in the catalogue's Style
+        # vocabulary) to be accepted verbatim; only category/brand are
+        # actually strict here. Matches _classify_requirement()'s
+        # color/material carve-out (style there goes through _style_value()
+        # separately, which is likewise never gazetteer-only).
         canonical = lookup_gazetteer(gazetteer, slot, value) or normalized
+    else:
+        # category/brand are strictly catalog-backed (module docstring:
+        # "Catalogue-backed values come only from labelled structured
+        # fields"). An answer the gazetteer doesn't recognise must not
+        # become a fabricated constraint — that guarantees zero retrieval
+        # matches for the rest of the session (verified: an unrecognised
+        # brand answer previously got stored verbatim). Drop the finding
+        # rather than inventing one.
+        canonical = lookup_gazetteer(gazetteer, slot, value)
+        if canonical is None:
+            return []
     return [_Finding(slot, canonical, "clarification_context", order)]
 
 
@@ -900,7 +989,11 @@ def extract_slots(
         findings.extend(_gazetteer_findings(message, gazetteer))
         findings.extend(_use_case_findings(message, gazetteer))
         findings.extend(_semantic_findings(message, gazetteer))
-        findings = _deduplicate_findings(findings)
+        # _residual_scenario() only reads `findings` (membership of each
+        # finding's value, order-independent) and never mutates it, so
+        # deduplicating here as well as below was pure duplicate work on
+        # every ordinary user turn — one _deduplicate_findings() call
+        # covers both branches.
         residual = _residual_scenario(message, findings)
 
     findings = _deduplicate_findings(findings)
@@ -1474,6 +1567,18 @@ def detect_slot_operations(
 
         if replacement_values:
             operations.append(SlotOperation("replace", slot, tuple(replacement_values)))
+            # A replacement classification for one value doesn't make every
+            # other positively-mentioned value in this utterance a
+            # replacement too ("red instead, blue too" replaces with red
+            # but also adds blue). apply_slot_operations() applies
+            # operations in order and each one re-reads live state, so a
+            # trailing upsert here correctly adds on top of the replace
+            # above rather than being dropped.
+            leftover_additions = tuple(
+                value for value in positive_values if value not in replacement_values
+            )
+            if leftover_additions:
+                operations.append(SlotOperation("upsert", slot, leftover_additions))
             continue
 
         active_ids = set(_value_identities(active_values))
