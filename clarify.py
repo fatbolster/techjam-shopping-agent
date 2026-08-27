@@ -4,9 +4,14 @@ Design doc §3.4 Step 5 (Clarification decision): "score(a) =
 P(answerable | a) x H(a), H(a) = -Sum_v p(v) log2 p(v). Ask about argmax if
 the score clears a threshold."
 
-Owner: Owner D (Clarification policy). Answerability priors are initialised by
-judgement, then re-estimated from instrumented transcripts. This module also
-owns the per-session clarification cap.
+Owner: Marcus (Evaluation and integration). §8.5, step E4 ("Answerability priors
+initialised by judgement, then re-estimated from D8 transcripts. Per-session
+cap on clarifications.").
+
+(This line was briefly regressed to a broken "Owner: Owner D" placeholder in
+8c64053, undoing the correct Chellappan<->Marcus D/E-lane swap from f98422b —
+restored here to match README.md's still-correct "Marcus — Evaluation and
+integration" section, which is the tie-breaker for current ownership.)
 
 Everything below is a stub except shannon_entropy(), which is implemented
 for real: it is a pure, unambiguous formula (§3.4 Step 5) with no design
@@ -107,7 +112,7 @@ def score_attribute(attribute: str, pool: list[Candidate], state: SessionState) 
 
     Design doc §3.4 Step 5: "Weighting by answerability inverts the
     ranking correctly: category 2.84, department 1.67, brand 0.73."
-    Owner D.
+    Marcus, step E4.
 
     STUB: computes real entropy over a fixture value distribution (not the
     real per-candidate attribute values, since facts lookups here are
