@@ -1,4 +1,4 @@
-# Bolster Shopping Agent
+# Techjam Shopping Agent (Team fatbolster) 
 
 A headless conversational shopping agent. It talks to a shopper across
 multiple turns and surfaces the product they actually want — ranked as
