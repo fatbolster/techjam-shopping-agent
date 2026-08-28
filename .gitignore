@@ -26,3 +26,7 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Organizer-supplied kit (not authored by this team, like data/ and models/)
+kit/*
+!kit/README.md
