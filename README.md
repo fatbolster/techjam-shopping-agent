@@ -10,14 +10,37 @@ writes their own README section ... Marcus merges").
 
 **Status:** end to end and real on the full 50,000-row catalogue —
 `agent.py` runs against real data, not just fixtures, and every lane's
-own README section below is filled in with what's actually built.
-Remaining gaps: the organizer evaluator/participant kit itself (D1/E3 use
-our own §6.1-formula scorer until it lands — see `kit/README.md`); E6
-(actually running all nine ablation configs against the real catalogue and
-populating the table — the code path is real and tested, not yet
-executed end to end); E7 (grid-search thresholds/quotas, not yet started).
-See each file's module docstring for what it does and does not implement,
-and the per-owner sections below for specifics.
+own README section below is filled in with what's actually built. D1 is
+now resolved for real: the organizer's evaluator (`evaluator/evaluator.py`)
+and reference baseline agent (`starter/`) are in the repo, and
+`starter/agent.py` is swapped to score this team's real `Agent` — see
+"Official evaluator results" below. Remaining gaps: E6 (actually running
+all nine ablation configs against the real catalogue and populating the
+table — the code path is real and tested, not yet executed end to end);
+E7 (grid-search thresholds/quotas, not yet started). See each file's
+module docstring for what it does and does not implement, and the
+per-owner sections below for specifics.
+
+## Official evaluator results
+
+Run via `python3 -m evaluator.evaluator --output output.json` (from repo
+root; needs `starter` importable as a package). The evaluator bundles its
+own user simulator — configuration A (§6.5.1), resolved for real once the
+kit arrived; see D1's note in the Chellappan section below.
+
+| Metric | Overall | buying | browsing | intent_override | boundary |
+|---|---|---|---|---|---|
+| Hit Rate@10 | 0.525 | 0.588 | 0.438 | 0.567 | 0.600 |
+| MRR | 0.272 | 0.278 | 0.234 | 0.310 | 0.417 |
+| MTTC | 6.32 | 5.31 | 7.24 | 6.80 | 5.50 |
+| Efficiency | 0.469 | — | — | — | — |
+| **Technical score** | **0.438** | — | — | — | — |
+
+(`recommended_technical_score = 0.50·HitRate + 0.30·MRR + 0.20·Efficiency`,
+per the evaluator's own formula.) Full per-session detail in `output.json`.
+`evaluate.py`'s own §6.1-formula scorer remains useful for fast local
+iteration (it doesn't need a full evaluator round-trip), but these are now
+the headline numbers.
 
 ## Setup
 
@@ -26,6 +49,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python3 agent.py   # smoke test: three fixture turns, printed responses
+python3 -m evaluator.evaluator --output output.json   # full 200-session official score
 ```
 
 Real data (`catalog.jsonl`, `public_set.jsonl`, the embedding matrix) is
@@ -161,10 +185,18 @@ corpus.*
   `telemetry.py`'s `log_turn`/`build_training_rows`/
   `per_stream_recall_report`/`export_transcripts`; `run_instrumented_corpus()`
   as the end-to-end driver.
-- **D1:** resolved as configuration C (§6.5.1) — no evaluator/kit was in
-  the repo at implementation time, so this codebase owns the simulator and
-  conversation loop. Reopens for real once `kit/` is populated, in case
-  the actual kit turns out to bundle its own simulator (config A).
+- **D1:** initially assumed configuration C (§6.5.1) in the kit's absence,
+  so this codebase built its own simulator/conversation loop — now that
+  `evaluator/evaluator.py` has arrived, D1 is resolved for real as
+  **configuration A**: the evaluator bundles its own simulator
+  (`initial_message()`/`customer_reply()`/`behavior_for()`, driven by an
+  `intent_card` derived per-session from the target product). `simulate.py`
+  isn't what the evaluator calls into for official scoring — it remains
+  useful for this team's own training-corpus generation (C5's fit), and
+  its phrasing differs from the evaluator's own (worth watching: e.g. the
+  evaluator's intent_override message is "Actually, ignore my earlier
+  preference. What I need is: X." rather than simulate.py's "not X, Y
+  instead" — B5's negation detector was tuned against the latter).
 - **How to verify:** `python3 -m pytest tests/test_simulate.py
   tests/test_telemetry.py`; `python3 -m evaluate` for a real run —
   writes `data/features.jsonl` (~24,000 labelled rows over 200 sessions —
