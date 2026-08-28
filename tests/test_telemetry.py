@@ -191,6 +191,12 @@ def test_run_instrumented_corpus_end_to_end(tmp_path) -> None:
         public_set_path=str(public_set),
         telemetry_path=str(tmp_path / "telem.jsonl"),
         feature_matrix_path=str(features_path),
+        # transcript_path defaults to "data/transcripts.txt" — without this
+        # override every run of this test silently overwrites the real D8
+        # export with these 6 fixture-catalog sessions (found by diffing a
+        # real run_instrumented_corpus() run's transcripts.txt against a
+        # suite run that happened to interleave with it).
+        transcript_path=str(tmp_path / "transcripts.txt"),
         max_turns=6,
     )
 
