@@ -1,6 +1,6 @@
 """
 Contract tests for rank.py's hand-set weighted scoring (design doc §3.4
-Step 6, §8.3 step C3).
+Step 6, §8.3 step C3) and the fitted logistic regression (§8.3 step C5).
 
 Scope: score_candidates()/rank() and their supporting weighted-sum/sort/
 truncate/top_k machinery — the part that is actually implemented and
@@ -9,18 +9,22 @@ running today (verified live via `python3 agent.py`). Individual feature
 already covered by tests/test_features.py; this file only tests how
 rank.py combines and orders those values.
 
-OUT OF SCOPE, deliberately: fit_logistic_regression()'s actual fitting
-behavior (C5) is blocked on Chellappan's D6 delivering the ~4,200-row
-feature matrix — that function is still a stub that ignores its inputs
-and returns HANDSET_WEIGHTS regardless. The one test below for it
-(test_fit_logistic_regression_stub_ignores_inputs) protects only the
-documented placeholder behavior, and must be rewritten once C5 actually
-fits a real model. Likewise llm_rerank() (C7, closed as won't-do — no
-LLM access provided) is tested only for its current "always None, always
-falls back" stub contract.
+fit_logistic_regression() (C5) is tested against small synthetic feature
+matrices fabricated in this file, not the real ~4,200-row corpus — that
+corpus is still blocked on Owner A's retrieval (§8.1, A2-A9) being real
+rather than fixture (D6's `run_instrumented_corpus` exists per Owner D's
+PR, but a run today would pool almost entirely negatives: keyword_search()
+still ignores its query and returns a fixed handful of fixture ASINs
+regardless of the real 50k-row catalogue, so the real target is almost
+never in the pool). These tests protect the *fitting mechanics* — sklearn
+wiring, GroupKFold-by-session_id, the scaler fold-in — so that once a real
+corpus exists, only the input changes, not this code. Likewise llm_rerank()
+(C7, closed as won't-do — no LLM access provided) is tested only for its
+current "always None, always falls back" stub contract.
 """
 
 import math
+import random
 
 import pytest
 
@@ -33,7 +37,10 @@ from rank import (
     FittedRanker,
     fit_logistic_regression,
     llm_rerank,
+    load_fitted_ranker,
     rank,
+    rows_to_training_arrays,
+    save_fitted_ranker,
     score_candidates,
 )
 from state import SessionState
@@ -273,19 +280,189 @@ def test_fitted_ranker_default_weights_are_an_independent_copy():
 
 
 # --------------------------------------------------------------------------
-# fit_logistic_regression() / llm_rerank() — current STUB contracts only.
-# These protect placeholder behavior, not real fitting/LLM logic. Rewrite
-# fit_logistic_regression's test once C5 lands (blocked on Chellappan/D6);
-# llm_rerank's stays as-is (C7 closed as won't-do, no LLM access).
+# fit_logistic_regression() — real sklearn fit (§8.3 step C5), exercised
+# against small synthetic feature matrices fabricated below, not the real
+# corpus (still blocked on Owner A's retrieval — see module docstring).
 # --------------------------------------------------------------------------
 
-def test_fit_logistic_regression_stub_ignores_inputs():
-    ranker = fit_logistic_regression(
-        feature_matrix=[{"pop": 0.5}], labels=[1], groups=["session-1"]
-    )
+sklearn = pytest.importorskip("sklearn")  # C5's dependency; skip this section without it
+
+
+def _synthetic_rows(n_sessions: int = 12, rows_per_session: int = 6, seed: int = 0):
+    """Fabricate a feature matrix where `pop` alone predicts the label.
+
+    One positive (high pop) and several negatives (low pop, plus noise on
+    every other feature) per fake session — enough sessions for GroupKFold
+    to form multiple folds, and a signal strong enough that a real fit
+    should recover a positive `pop` weight and near-zero weight elsewhere.
+    """
+    rng = random.Random(seed)
+    feature_matrix, labels, groups = [], [], []
+    for session_i in range(n_sessions):
+        session_id = f"session-{session_i}"
+        for row_i in range(rows_per_session):
+            is_target = row_i == 0
+            row = {name: rng.uniform(0.0, 1.0) for name in FEATURE_NAMES}
+            row["pop"] = rng.uniform(0.8, 1.0) if is_target else rng.uniform(0.0, 0.2)
+            feature_matrix.append(row)
+            labels.append(1 if is_target else 0)
+            groups.append(session_id)
+    return feature_matrix, labels, groups
+
+
+def test_fit_logistic_regression_returns_fitted_ranker_not_handset():
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
     assert isinstance(ranker, FittedRanker)
-    assert ranker.weights == HANDSET_WEIGHTS
-    assert ranker.intercept == 0.0
+    assert ranker.weights != HANDSET_WEIGHTS  # actually fit, not the stub passthrough
+
+
+def test_fit_logistic_regression_recovers_the_dominant_signal():
+    """pop alone separates the classes here; its fitted weight must be the
+    largest in magnitude and must be positive (higher pop -> more likely
+    the target), same sign convention as HANDSET_WEIGHTS."""
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    assert ranker.weights["pop"] > 0
+    assert ranker.weights["pop"] == max(ranker.weights.values(), key=abs)
+
+
+def test_fit_logistic_regression_weights_cover_every_feature():
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    assert set(ranker.weights) == set(FEATURE_NAMES)
+    assert set(ranker.feature_means) == set(FEATURE_NAMES)
+    assert set(ranker.feature_stds) == set(FEATURE_NAMES)
+
+
+def test_fit_logistic_regression_persists_scaler_stats():
+    """feature_means/feature_stds must reflect the real training data, not
+    defaults — spot-check pop's mean lands strictly between the two
+    clusters this fixture draws it from ([0, 0.2] negatives, [0.8, 1.0]
+    positive)."""
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    assert 0.2 < ranker.feature_means["pop"] < 0.8
+    assert ranker.feature_stds["pop"] > 0
+
+
+def test_fit_logistic_regression_reports_cv_accuracy():
+    """12 distinct sessions -> GroupKFold should actually run and report a
+    score; the synthetic signal is strong enough to expect well above
+    chance (0.5) on held-out sessions."""
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    assert ranker.cv_accuracy is not None
+    assert 0.0 <= ranker.cv_accuracy <= 1.0
+    assert ranker.cv_accuracy > 0.5
+
+
+def test_fit_logistic_regression_cv_accuracy_none_with_too_few_sessions():
+    """A single session can't form 2 GroupKFold folds; fitting must still
+    succeed (the whole-data fit doesn't need multiple groups), just without
+    a cv_accuracy figure."""
+    feature_matrix, labels, _ = _synthetic_rows(n_sessions=1)
+    ranker = fit_logistic_regression(feature_matrix, labels, groups=["only-session"] * len(labels))
+    assert ranker.cv_accuracy is None
+
+
+def test_fit_logistic_regression_rejects_mismatched_lengths():
+    with pytest.raises(ValueError):
+        fit_logistic_regression(feature_matrix=[{"pop": 0.5}], labels=[1, 0], groups=["s1"])
+
+
+def test_fit_logistic_regression_rejects_single_class_labels():
+    feature_matrix, _, groups = _synthetic_rows()
+    with pytest.raises(ValueError):
+        fit_logistic_regression(feature_matrix, labels=[1] * len(feature_matrix), groups=groups)
+
+
+def test_fit_logistic_regression_missing_feature_keys_default_to_zero():
+    """A row dict that omits a feature name must not crash — matches
+    score_candidates()'s existing missing-weight convention."""
+    feature_matrix = [{"pop": 0.9}, {"pop": 0.1}] * 6
+    labels = [1, 0] * 6
+    groups = [f"session-{i}" for i in range(6) for _ in range(2)]
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    assert set(ranker.weights) == set(FEATURE_NAMES)
+
+
+def test_fitted_ranker_changes_rank_order_vs_handset(indexes, state_empty, pool):
+    """A ranker fit to prefer the opposite of pop must be able to invert
+    the HANDSET_WEIGHTS ordering rank() otherwise produces for `pool`."""
+    invert_pop = {name: 0.0 for name in FEATURE_NAMES}
+    invert_pop["pop"] = -1.0
+    ranker = FittedRanker(weights=invert_pop)
+    ranked = rank(pool, state_empty, indexes, ranker=ranker, top_k=3)
+    assert ranked == ["LOW_POP", "MID_POP", "HIGH_POP"]
+
+
+# --------------------------------------------------------------------------
+# rows_to_training_arrays() — the D6 row-schema adapter (§6.6 step 2)
+# --------------------------------------------------------------------------
+
+def test_rows_to_training_arrays_unpacks_d6_row_schema():
+    rows = [
+        {
+            "session_id": "s1",
+            "turn": 1,
+            "n_hard_slots": 2,
+            "parent_asin": "TARGET",
+            "features": [float(i) for i in range(len(FEATURE_NAMES))],
+            "label": 1,
+        },
+        {
+            "session_id": "s1",
+            "turn": 1,
+            "n_hard_slots": 2,
+            "parent_asin": "OTHER",
+            "features": [0.0] * len(FEATURE_NAMES),
+            "label": 0,
+        },
+    ]
+    feature_matrix, labels, groups = rows_to_training_arrays(rows)
+    assert feature_matrix[0] == dict(zip(FEATURE_NAMES, range(len(FEATURE_NAMES))))
+    assert labels == [1, 0]
+    assert groups == ["s1", "s1"]
+
+
+def test_rows_to_training_arrays_output_feeds_fit_logistic_regression_directly():
+    """The adapter's output must be accepted as-is by fit_logistic_regression
+    — this is the whole point of the adapter."""
+    feature_matrix, labels, groups = _synthetic_rows()
+    rows = [
+        {"session_id": g, "features": [row.get(name, 0.0) for name in FEATURE_NAMES], "label": label}
+        for row, label, g in zip(feature_matrix, labels, groups)
+    ]
+    adapted_matrix, adapted_labels, adapted_groups = rows_to_training_arrays(rows)
+    ranker = fit_logistic_regression(adapted_matrix, adapted_labels, adapted_groups)
+    assert isinstance(ranker, FittedRanker)
+
+
+# --------------------------------------------------------------------------
+# save_fitted_ranker() / load_fitted_ranker() — persistence (§8.3 step C5:
+# "Persist the fitted model/scaler to disk ... so it doesn't need
+# refitting every run.")
+# --------------------------------------------------------------------------
+
+def test_save_then_load_fitted_ranker_round_trips(tmp_path):
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    path = str(tmp_path / "ranker.json")
+    save_fitted_ranker(ranker, path)
+    loaded = load_fitted_ranker(path)
+    assert loaded == ranker
+
+
+def test_save_fitted_ranker_creates_parent_directories(tmp_path):
+    path = str(tmp_path / "nested" / "dir" / "ranker.json")
+    save_fitted_ranker(FittedRanker(), path)
+    assert load_fitted_ranker(path) == FittedRanker()
+
+
+def test_load_fitted_ranker_missing_file_raises():
+    with pytest.raises(FileNotFoundError):
+        load_fitted_ranker("/nonexistent/path/ranker.json")
 
 
 def test_llm_rerank_stub_always_returns_none():

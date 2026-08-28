@@ -9,7 +9,13 @@ defensive parsing).
 
 score_candidates()/rank() (C3) do real weighted-sum arithmetic over real
 features.py feature values as of issues #20-#23 (C1-C4). fit_logistic_regression()
-(C5) and llm_rerank() (C7) remain deliberate stubs — out of scope here.
+(C5) now does a real sklearn fit; see its docstring for the raw-feature-space
+weight fold-in that keeps score_candidates() unchanged. Real corpus not yet
+available (blocked on Owner A's retrieval, §8.1 A2-A9, being real rather
+than fixture — see rows_to_training_arrays() for the D6 adapter, exercised
+here only against synthetic fixtures until then). llm_rerank() (C7) remains
+a deliberate stub — out of scope here (closed as won't-do, no LLM access
+provided).
 sklearn is imported lazily inside fit_logistic_regression() so this module
 is importable without the dependency installed (§9: "Pipeline is fully
 functional with zero LLM calls").
@@ -17,13 +23,20 @@ functional with zero LLM calls").
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from features import FEATURE_NAMES, extract_features
 from indexes import Indexes
 from state import SessionState
 from utils import Candidate
+
+# Where the fitted model is persisted (gitignored, like the embedding
+# matrix — §8.3 step C5: "Persist the fitted model/scaler to disk ... so
+# it doesn't need refitting every run.").
+DEFAULT_RANKER_PATH = "models/ranker.json"
 
 # Hand-set weights, one per FEATURE_NAMES entry (§8.3 step C3: "Constants
 # at module top for single-line tuning. Produces a complete ranking on day
@@ -64,15 +77,25 @@ class FittedRanker:
 
     Attributes:
         weights: Fitted coefficient per feature, in FEATURE_NAMES order.
-        intercept: Fitted intercept term.
+            Already folded together with the scaler (raw-feature-space, so
+            score_candidates() needs no separate scaling step — see
+            fit_logistic_regression()).
+        intercept: Fitted intercept term, same raw-feature-space fold-in.
+            Unused by score_candidates() today (a per-candidate-turn
+            constant does not change relative order), kept for probability
+            interpretation / future use.
         feature_means: Per-feature mean used by the persisted StandardScaler.
         feature_stds: Per-feature std used by the persisted StandardScaler.
+        cv_accuracy: Mean GroupKFold-by-session_id held-out accuracy from
+            fitting (§6.6 step 5), or None when fit with hand-set weights
+            (never fitted) or too few distinct sessions to form 2+ folds.
     """
 
     weights: dict[str, float] = field(default_factory=lambda: dict(HANDSET_WEIGHTS))
     intercept: float = 0.0
     feature_means: dict[str, float] = field(default_factory=dict)
     feature_stds: dict[str, float] = field(default_factory=dict)
+    cv_accuracy: Optional[float] = None
 
 
 def score_candidates(
@@ -113,27 +136,159 @@ def fit_logistic_regression(
     Design doc §6.6 Ranker training protocol and §3.4 Step 6: "class_weight
     = 'balanced', L2 regularisation ... validate with GroupKFold grouped by
     session_id." Owner Emerson, §8.3 step C5. Input comes from D6's instrumented
-    run (telemetry.py / simulate.py), joined against ground truth offline.
+    run (telemetry.py / simulate.py), joined against ground truth offline —
+    see `rows_to_training_arrays()` for the adapter from D6's row schema to
+    the three parallel arguments here.
 
     sklearn is imported here, not at module level, so rank.py stays
     importable in environments without it installed (§1.2: "No hosted
     model access provided ... Pipeline is fully functional with zero LLM
     calls"; the regression is a separate, optional-at-import dependency).
 
-    STUB: does not call sklearn at all; returns a FittedRanker with
-    HANDSET_WEIGHTS copied over, regardless of `feature_matrix`/`labels`/
-    `groups`.
+    Fits `sklearn.preprocessing.StandardScaler` + `LogisticRegression(
+    class_weight="balanced", penalty="l2")` on the full input, then folds
+    the scaler into the returned weights/intercept so `score_candidates()`
+    can keep applying `sum(weight * raw_feature_value)` unchanged — no
+    scaling step needed at scoring time (§6.6: "raw_weight_i = coef_i /
+    scale_i; raw_intercept = intercept_ - sum(coef_i * mean_i / scale_i)",
+    the standard fold-in for `intercept + coef . ((x - mean) / scale)`).
+    `feature_means`/`feature_stds` are still persisted on the FittedRanker
+    per "scaler persisted alongside the model", for inspection/C8's
+    coefficient report and so `rank.py` never has to reconstruct them from
+    training data.
+
+    A GroupKFold(session_id) validation pass also runs, purely to report
+    out-of-session accuracy — the returned model itself is refit on every
+    row (§6.6 step 5 validates the *approach*, it does not select which
+    fold's model ships).
 
     Args:
-        feature_matrix: One dict per training row (session_id, turn,
-            parent_asin, features), per §6.6 step 2.
+        feature_matrix: One dict per training row, feature name (per
+            FEATURE_NAMES) -> value. Missing feature keys default to 0.0.
         labels: 1 for the session's target ASIN, 0 otherwise (§6.6 step 3).
         groups: session_id per row, for GroupKFold (§6.6 step 5).
 
     Returns:
-        A FittedRanker (fixture: hand-set weights, zero intercept).
+        A FittedRanker with real fitted weights/intercept (raw-feature
+        space) and the persisted scaler's per-feature means/stds.
+
+    Raises:
+        ValueError: fewer than 2 rows, or labels are all one class (sklearn
+            cannot fit a decision boundary from a single class).
     """
-    return FittedRanker()
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import GroupKFold
+    from sklearn.preprocessing import StandardScaler
+
+    if len(feature_matrix) != len(labels) or len(feature_matrix) != len(groups):
+        raise ValueError(
+            f"feature_matrix ({len(feature_matrix)}), labels ({len(labels)}), and "
+            f"groups ({len(groups)}) must be the same length"
+        )
+    if len(set(labels)) < 2:
+        raise ValueError("labels must contain both classes (need at least one 0 and one 1)")
+
+    X = np.array([[row.get(name, 0.0) for name in FEATURE_NAMES] for row in feature_matrix])
+    y = np.array(labels)
+    groups_arr = np.array(groups)
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    def _new_model() -> LogisticRegression:
+        return LogisticRegression(class_weight="balanced", penalty="l2")
+
+    # GroupKFold validation (§6.6 step 5) — session_id groups, not a plain
+    # random split, since rows within a session are not independent.
+    # Report-only: skipped (rather than erroring) when there are too few
+    # distinct sessions to form at least 2 folds.
+    n_unique_groups = len(set(groups))
+    cv_accuracy: Optional[float] = None
+    if n_unique_groups >= 2:
+        n_splits = min(5, n_unique_groups)
+        fold_scores = []
+        for train_idx, test_idx in GroupKFold(n_splits=n_splits).split(X_scaled, y, groups=groups_arr):
+            if len(set(y[train_idx].tolist())) < 2:
+                continue  # a fold whose training split lost one class can't fit
+            fold_model = _new_model().fit(X_scaled[train_idx], y[train_idx])
+            fold_scores.append(fold_model.score(X_scaled[test_idx], y[test_idx]))
+        if fold_scores:
+            cv_accuracy = sum(fold_scores) / len(fold_scores)
+
+    model = _new_model().fit(X_scaled, y)
+
+    # Fold the scaler into the weights so score_candidates() keeps scoring
+    # raw feature values directly: intercept + coef . ((x - mean) / scale)
+    # == (intercept - sum(coef * mean / scale)) + sum((coef / scale) * x).
+    coef = model.coef_[0]
+    raw_weights = coef / scaler.scale_
+    raw_intercept = float(model.intercept_[0] - np.sum(coef * scaler.mean_ / scaler.scale_))
+
+    return FittedRanker(
+        weights=dict(zip(FEATURE_NAMES, (float(w) for w in raw_weights))),
+        intercept=raw_intercept,
+        feature_means=dict(zip(FEATURE_NAMES, (float(m) for m in scaler.mean_))),
+        feature_stds=dict(zip(FEATURE_NAMES, (float(s) for s in scaler.scale_))),
+        cv_accuracy=cv_accuracy,
+    )
+
+
+def rows_to_training_arrays(
+    rows: list[dict],
+) -> tuple[list[dict[str, float]], list[int], list[str]]:
+    """Adapt D6's training-row schema into fit_logistic_regression()'s inputs.
+
+    D6 (telemetry.py `build_training_rows()`) emits one dict per row:
+    `session_id, turn, n_hard_slots, parent_asin, features` (a list of ten
+    floats in FEATURE_NAMES order, per §6.6 step 2), `label`. This unpacks
+    that into the three parallel arguments `fit_logistic_regression()`
+    expects, matching FEATURE_NAMES order back onto feature names.
+
+    Args:
+        rows: Output of `telemetry.build_training_rows()`.
+
+    Returns:
+        (feature_matrix, labels, groups) — same length, same row order.
+    """
+    feature_matrix = [dict(zip(FEATURE_NAMES, row["features"])) for row in rows]
+    labels = [row["label"] for row in rows]
+    groups = [row["session_id"] for row in rows]
+    return feature_matrix, labels, groups
+
+
+def save_fitted_ranker(ranker: FittedRanker, path: str = DEFAULT_RANKER_PATH) -> None:
+    """Persist a FittedRanker to disk as JSON (§8.3 step C5, "so it doesn't
+    need refitting every run"). Plain JSON, not pickle/joblib: a
+    FittedRanker holds only the folded-in weights/intercept and the
+    scaler's means/stds, all plain floats — no sklearn objects to
+    serialize, so this stays readable and dependency-free to load.
+
+    Args:
+        ranker: The FittedRanker to persist.
+        path: Destination path (default gitignored, like the embedding
+            matrix — see `models/` in .gitignore).
+    """
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(asdict(ranker), f, indent=2, sort_keys=True)
+
+
+def load_fitted_ranker(path: str = DEFAULT_RANKER_PATH) -> FittedRanker:
+    """Load a FittedRanker previously written by save_fitted_ranker().
+
+    Args:
+        path: Source path (default matches save_fitted_ranker()'s default).
+
+    Returns:
+        The persisted FittedRanker.
+
+    Raises:
+        FileNotFoundError: no ranker has been persisted at `path` yet.
+    """
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return FittedRanker(**data)
 
 
 def llm_rerank(
