@@ -322,12 +322,25 @@ def build_facts_dict(catalog: list[dict]) -> dict[str, dict]:
     rather than re-deriving a second join (§3.2/§7.2: "so the indexes
     cannot silently diverge").
 
+    Also carries `brand`/`color`/`material`/`style`/`size` — one field per
+    `utils.PRODUCT_TEXT_DETAIL_KEYS` entry (`row["details"]`, or None when
+    that row's `details` doesn't have the key), plus `size` (not one of
+    product_text()'s five, since product_text() feeds embeddings/FTS5
+    where a size like "M" or "10.5" is low-value token noise, but useful
+    here structured). This is a superset of §3.2 Index 3's literal field
+    list — not spec, but what clarify.py's score_attribute() needs for a
+    real per-candidate value distribution (Marcus, §8.5 step E4) without
+    reaching back into raw catalogue rows for a second, divergence-prone
+    join.
+
     Args:
         catalog: Raw catalogue rows.
 
     Returns:
-        asin -> {dept, cat3, store, price, rating_number, pop, rating, blob}
-        `dept`/`cat3` are None when `categories` is too short to hold them.
+        asin -> {dept, cat3, store, price, rating_number, pop, rating, blob,
+        brand, color, material, style, size}. `dept`/`cat3` are None when
+        `categories` is too short to hold them; the five detail fields are
+        None when absent from that row's `details`.
     """
     from utils import product_text
 
@@ -336,12 +349,18 @@ def build_facts_dict(catalog: list[dict]) -> dict[str, dict]:
         asin = row["parent_asin"]
         rn = row.get("rating_number", 0) or 0
         categories = row.get("categories") or []
+        details = row.get("details") or {}
         facts[asin] = {
             "dept": categories[1] if len(categories) > 1 else None,
             "cat3": categories[2] if len(categories) > 2 else None,
             "store": row.get("store"),
             "price": row.get("price"),
             "rating_number": rn,
+            "brand": details.get("Brand"),
+            "color": details.get("Color"),
+            "material": details.get("Material"),
+            "style": details.get("Style"),
+            "size": details.get("Size"),
             "pop": float(np.log1p(rn) / np.log1p(100_000)),
             "rating": row.get("average_rating"),
             "blob": product_text(row).lower(),

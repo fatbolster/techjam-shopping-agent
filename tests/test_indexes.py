@@ -290,6 +290,23 @@ def test_build_facts_dict_carries_store_price_rating(facts):
     assert facts["B00FIXTURE1"]["rating"] == 4.5
 
 
+def test_build_facts_dict_carries_the_detail_fields_for_clarify(facts):
+    """brand/color/material/style/size — the superset used by clarify.py's
+    score_attribute() (E4) for a real per-candidate value distribution."""
+    row1 = facts["B00FIXTURE1"]
+    assert row1["brand"] == "London Fog"
+    assert row1["color"] == "Auburn"
+    assert row1["material"] == "Polyester"
+    assert row1["style"] == "Golf Jacket"
+    assert row1["size"] is None  # FIXTURE_CATALOG's rows have no Size detail
+
+
+def test_build_facts_dict_detail_fields_none_when_details_empty():
+    facts = build_facts_dict([{"parent_asin": "X"}])
+    for key in ("brand", "color", "material", "style", "size"):
+        assert facts["X"][key] is None
+
+
 def test_build_category_lists_groups_by_dept(facts):
     lists = build_category_lists(FIXTURE_CATALOG, facts)
     assert set(lists["Men"]) == {"B00FIXTURE1", "B00FIXTURE2"}

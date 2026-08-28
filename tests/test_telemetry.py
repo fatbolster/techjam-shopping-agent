@@ -31,7 +31,7 @@ def test_n_hard_slots_counts_only_filter_authorising_slots() -> None:
 # --------------------------------------------------------------------------
 def test_log_turn_writes_one_row_with_features_and_sources(tmp_path) -> None:
     path = str(tmp_path / "telem.jsonl")
-    indexes = build_indexes(FIXTURE_CATALOG)
+    indexes = build_indexes(FIXTURE_CATALOG, embedding_cache_path=None)
     state = init_state("sess-1")
     state.slots = {"category": "Running"}
     state.track = "buy"

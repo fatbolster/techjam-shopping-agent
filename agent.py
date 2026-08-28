@@ -146,7 +146,7 @@ class Agent:
         track = pick_track(state)
         pool = retrieve(state, track, self.indexes)
 
-        ask_attribute = pick_attribute(pool, state)
+        ask_attribute = pick_attribute(pool, state, indexes=self.indexes)
         if ask_attribute is not None:
             state.asked_attributes.add(ask_attribute)
             # Record what the *next* incoming turn is answering, so

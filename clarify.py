@@ -13,16 +13,24 @@ cap on clarifications.").
 restored here to match README.md's still-correct "Marcus — Evaluation and
 integration" section, which is the tie-breaker for current ownership.)
 
-Everything below is a stub except shannon_entropy(), which is implemented
-for real: it is a pure, unambiguous formula (§3.4 Step 5) with no design
-judgement left to defer, unlike the answerability prior it is weighted by.
+shannon_entropy() was always real (§3.4 Step 5, a pure formula). score_attribute()
+now computes real per-candidate value distributions too, via an optional
+`indexes` parameter (keyword-only, defaulting to None — pick_attribute(pool,
+state) -> str | None, §7.2's interface sketch, still works unchanged for
+any caller that doesn't pass one; see score_attribute()'s docstring for
+what None falls back to). ANSWERABILITY_PRIOR stays hand-set — §3.4 Step 5:
+"initially hand-set and subsequently estimated from instrumented simulator
+runs" — re-estimating it is D8/E4's transcript-driven follow-up, not done
+here.
 """
 
 from __future__ import annotations
 
 import math
 from collections import Counter
+from typing import Optional
 
+from indexes import Indexes
 from state import CLARIFICATION_ATTRIBUTES, SessionState
 from utils import Candidate
 
@@ -107,36 +115,121 @@ def shannon_entropy(values: list[str]) -> float:
     return -sum((count / total) * math.log2(count / total) for count in counts.values())
 
 
-def score_attribute(attribute: str, pool: list[Candidate], state: SessionState) -> float:
+# feature/use_case have no dedicated structured facts field (facts.py's
+# Index 3 carries dept/cat3/store/price/brand/color/material/style/size —
+# "feature" is free text, not a controlled few-valued attribute anyone
+# catalogued). Bucketing each candidate by which of a small controlled
+# phrase set appears in facts[asin]['blob'] (§3.2's lowercased
+# product_text()) gives a real, if coarse, categorical distribution rather
+# than a fixture placeholder — reusing the same "small hand-picked phrase
+# list matched against text" approach extract.py's B3 already uses for
+# these two attributes (its _FEATURE_PHRASES/_use_case_findings), rather
+# than inventing a third vocabulary.
+_FEATURE_PHRASE_BUCKETS: tuple[str, ...] = (
+    "water resistant",
+    "waterproof",
+    "machine washable",
+    "lightweight",
+    "breathable",
+)
+_USE_CASE_PHRASE_BUCKETS: tuple[str, ...] = (
+    "running",
+    "hiking",
+    "yoga",
+    "travel",
+    "gym",
+    "outdoor",
+    "casual",
+    "formal",
+)
+
+# Budget has a real continuous facts field (price) but every candidate's
+# exact price is almost always unique, so literal per-candidate entropy
+# would sit near log2(pool size) regardless of whether prices actually
+# cluster — uninformative in the specific way §3.4 Step 5's H(a) is meant
+# to avoid. Bucketing into $20 bands turns it into the same kind of
+# few-valued categorical distribution as every other attribute here.
+_BUDGET_BUCKET_WIDTH = 20.0
+
+
+def _attribute_value(attribute: str, asin: str, facts: dict[str, dict]) -> Optional[str]:
+    """One candidate's bucketed value for `attribute`, or None if unknown.
+
+    None entries are dropped before shannon_entropy() (a candidate with no
+    known value contributes no information either way, rather than being
+    forced into a synthetic "unknown" bucket that would understate the
+    attribute's true informativeness among candidates that do have it).
+    """
+    row = facts.get(asin, {})
+    if attribute == "category":
+        return row.get("cat3") or row.get("dept")
+    if attribute == "brand":
+        return row.get("brand") or row.get("store")
+    if attribute in ("color", "material", "style", "size"):
+        return row.get(attribute)
+    if attribute == "budget":
+        price = row.get("price")
+        if price is None:
+            return None
+        return str(int(price // _BUDGET_BUCKET_WIDTH))
+    if attribute in ("feature", "use_case"):
+        blob = row.get("blob") or ""
+        phrases = _FEATURE_PHRASE_BUCKETS if attribute == "feature" else _USE_CASE_PHRASE_BUCKETS
+        matched = tuple(p for p in phrases if p in blob)
+        return ",".join(matched) if matched else "none"
+    return None
+
+
+def score_attribute(
+    attribute: str, pool: list[Candidate], state: SessionState, *, indexes: Optional[Indexes] = None
+) -> float:
     """score(a) = P(answerable | a) x H(a) for one unfilled attribute.
 
     Design doc §3.4 Step 5: "Weighting by answerability inverts the
     ranking correctly: category 2.84, department 1.67, brand 0.73."
     Marcus, step E4.
 
-    STUB: computes real entropy over a fixture value distribution (not the
-    real per-candidate attribute values, since facts lookups here are
-    stubbed elsewhere) and multiplies by ANSWERABILITY_PRIOR.
+    Computes real per-candidate values via `indexes.facts` (see
+    `_attribute_value()` for the attribute -> facts-field mapping,
+    including the two attributes — feature, use_case — with no dedicated
+    facts field) and takes their Shannon entropy, weighted by the hand-set
+    `ANSWERABILITY_PRIOR`. `state` is accepted (per the interface sketch)
+    but not read yet — excluding already-filled slots is pick_attribute()'s
+    job, not this scoring function's.
 
     Args:
-        attribute: The slot key being considered, e.g. "brand".
+        attribute: The ClarificationAttribute being considered, e.g. "brand".
         pool: The current candidate pool.
-        state: Current session state (would exclude already-filled slots).
+        state: Current session state.
+        indexes: Offline indexes bundle, keyword-only. None falls back to
+            an empty value distribution (entropy 0, so this attribute
+            never wins) — the same "no facts, no signal" fallback
+            extract.py/rank.py's other real functions use when their
+            optional catalogue-derived argument is omitted, rather than a
+            fixture placeholder that could win a question it has no real
+            basis to ask.
 
     Returns:
         The combined score; higher means a more worthwhile question.
     """
-    fixture_values = [f"[STUB value {i % 3}]" for i in range(len(pool))]
-    return ANSWERABILITY_PRIOR.get(attribute, 0.0) * shannon_entropy(fixture_values)
+    if indexes is None:
+        return 0.0
+    values = [v for v in (_attribute_value(attribute, c.asin, indexes.facts) for c in pool) if v is not None]
+    return ANSWERABILITY_PRIOR.get(attribute, 0.0) * shannon_entropy(values)
 
 
-def pick_attribute(pool: list[Candidate], state: SessionState) -> str | None:
+def pick_attribute(
+    pool: list[Candidate], state: SessionState, *, indexes: Optional[Indexes] = None
+) -> str | None:
     """Pick the best attribute to ask about, or None if none clears the bar.
 
     Design doc §7.2 interface contract: `pick_attribute(pool, state) -> str
-    | None`. §3.4 Step 5: "ask_attribute and recommendations occupy the
-    same return object ... the decision is therefore not 'ask or answer'
-    but 'answer, and additionally ask when useful'."
+    | None` — still satisfied exactly by any caller that omits `indexes`
+    (keyword-only, defaulting to None); Agent passes its own indexes bundle
+    for the real per-candidate scoring (see score_attribute()). §3.4 Step
+    5: "ask_attribute and recommendations occupy the same return object
+    ... the decision is therefore not 'ask or answer' but 'answer, and
+    additionally ask when useful'."
 
     Respects `state.asked_attributes` (don't repeat a question) and
     MAX_CLARIFICATIONS_PER_SESSION (protects MTTC, §3.4 Step 5).
@@ -144,6 +237,8 @@ def pick_attribute(pool: list[Candidate], state: SessionState) -> str | None:
     Args:
         pool: The current candidate pool.
         state: Current session state.
+        indexes: Offline indexes bundle, keyword-only — see
+            score_attribute()'s docstring for the None fallback.
 
     Returns:
         The slot key to ask about, or None.
@@ -159,6 +254,6 @@ def pick_attribute(pool: list[Candidate], state: SessionState) -> str | None:
     if not candidates:
         return None
 
-    scored = [(attr, score_attribute(attr, pool, state)) for attr in candidates]
+    scored = [(attr, score_attribute(attr, pool, state, indexes=indexes)) for attr in candidates]
     best_attr, best_score = max(scored, key=lambda pair: pair[1])
     return best_attr if best_score >= ASK_THRESHOLD else None
