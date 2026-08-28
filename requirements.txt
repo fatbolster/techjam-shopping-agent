@@ -7,8 +7,12 @@ scikit-learn==1.4.2
 sentence-transformers==2.7.0
 torch==2.2.2
 
-# Optional pairwise-objective comparison (§6.6 "Objective function", §8.3 step C6)
-lightgbm==4.3.0
+# lightgbm was pinned here for the optional pairwise-objective comparison
+# (§6.6 "Objective function", §8.3 step C6). C6 was closed as won't-do —
+# explicitly time-permitting and off the critical path — so nothing in the
+# codebase imports it. Removed: on macOS it fails to build without a
+# separate `brew install libomp`, which broke `pip install -r
+# requirements.txt` from a clean clone for an unused dependency.
 
 # Analysis (§8.0: ablation tables, slice plots, feature distributions)
 pandas==2.2.2
