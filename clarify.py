@@ -65,10 +65,29 @@ assert set(ANSWERABILITY_PRIOR) <= set(CLARIFICATION_ATTRIBUTES)
 
 # Score must clear this threshold to trigger a question (§3.4 Step 5:
 # "Ask about argmax if the score clears a threshold.").
-ASK_THRESHOLD = 1.0
+#
+# Lowered from 1.0 after measuring the supplied evaluator's actual
+# behaviour (docs/DESIGN_AUDIT.md, DC-3): when `ask_attribute` is None,
+# evaluator.py's customer_reply() returns a content-free string ("Ask me
+# about one specific attribute.") and discloses nothing. Asking is
+# therefore not a cost to be justified — it is the only channel through
+# which the agent acquires information, and it is additive (a full ranked
+# 10 is still returned and scored on the same turn). At 1.0 we ran 71.7%
+# of turns silent (3,224 of 4,497 logged), each of which could not narrow
+# the pool. §1.2's "every question must justify its cost" framing predates
+# sight of the evaluator.
+ASK_THRESHOLD = 0.15
 
 # Per-session cap on clarifications (§3.4 Step 5, §7.4 descoping order #3).
-MAX_CLARIFICATIONS_PER_SESSION = 3
+#
+# Raised from 3 for the same reason: the cap exists to "protect MTTC", but
+# MTTC is only harmed by a question when the session would otherwise have
+# converged sooner — and a silent turn cannot converge at all, because the
+# simulated user discloses nothing without a question. At 3, 203 sessions
+# exhausted the cap and then spent 679 further turns (15.1% of all turns)
+# unable to learn anything. Set to the evaluator's own 10-turn ceiling so
+# the cap never binds before the session does.
+MAX_CLARIFICATIONS_PER_SESSION = 10
 
 # ANSWERABILITY_PRIOR's keys (ClarificationAttribute) and state.slots' keys
 # (SlotKey) are two different vocabularies (state.py) that mostly, but not

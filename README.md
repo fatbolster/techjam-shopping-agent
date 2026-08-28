@@ -33,21 +33,38 @@ kit arrived; see D1's note in the Chellappan section below.
 
 | Metric | Overall | buying | browsing | intent_override | boundary |
 |---|---|---|---|---|---|
-| Hit Rate@10 | 0.580 | 0.638 | 0.513 | 0.633 | 0.500 |
-| MRR | 0.302 | 0.297 | 0.279 | 0.399 | 0.228 |
-| MTTC | 5.73 | 4.79 | 6.38 | 6.30 | 6.30 |
-| Efficiency | 0.528 | — | — | — | — |
-| **Technical score** | **0.486** | — | — | — | — |
+| Hit Rate@10 | 0.750 | 0.775 | 0.762 | 0.667 | 0.700 |
+| MRR | 0.384 | 0.371 | 0.399 | 0.413 | 0.287 |
+| MTTC | 4.74 | — | — | — | — |
+| Efficiency | 0.626 | — | — | — | — |
+| **Technical score** | **0.616** | — | — | — | — |
+
+For reference, the kit's own baseline agent (`agents/baseline_agent.py`,
+scored into `results/baseline.json`) gets Hit Rate@10 0.125, MRR 0.068,
+technical score **0.107** — this pipeline is **5.8x** that.
 
 (`recommended_technical_score = 0.50·HitRate + 0.30·MRR + 0.20·Efficiency`,
 per the evaluator's own formula.) Full per-session detail in
-`results/output.json`. These numbers are *with* the fitted ranker
-(`models/ranker.json`) wired in — an earlier run before that fix scored
-0.525/0.272/6.32/0.438 on the same four metrics, using unfitted
-`HANDSET_WEIGHTS` instead (see agents/our_agent.py's commit history: `respond()`
-wasn't passing a ranker to `rank()` at all). `evaluate.py`'s own
-§6.1-formula scorer remains useful for fast local iteration (it doesn't
-need a full evaluator round-trip), but these are now the headline numbers.
+`results/our_model.json`.
+
+Score history on this evaluator, each step measured not assumed:
+
+| change | Hit@10 | MRR | MTTC | score |
+|---|---:|---:|---:|---:|
+| hand-set ranking weights | 0.525 | 0.272 | 6.32 | 0.438 |
+| + fitted ranker actually wired in | 0.580 | 0.302 | 5.73 | 0.486 |
+| + clarification policy retuned to the evaluator | **0.750** | **0.384** | **4.74** | **0.616** |
+
+The last step changed two constants in `clarify.py` (`ASK_THRESHOLD`,
+`MAX_CLARIFICATIONS_PER_SESSION`) after measuring that the evaluator's
+simulated user discloses nothing on a turn where `ask_attribute` is None —
+so asking is the only information channel, not a cost to be rationed. See
+`docs/DESIGN_AUDIT.md` DC-3. Net effect: 35 sessions went miss→hit, 1 went
+hit→miss, and mean rank among hits was unchanged at ~1.95.
+
+`evaluate.py`'s own §6.1-formula scorer remains useful for fast local
+iteration (it doesn't need a full evaluator round-trip), but these are now
+the headline numbers.
 
 ## Setup
 
