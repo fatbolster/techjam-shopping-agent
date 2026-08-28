@@ -32,11 +32,12 @@ exactly, even though every step it calls returns fixture data.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from clarify import pick_attribute
 from extract import AttributeGazetteer, build_attribute_gazetteer, update_slots
 from indexes import Indexes, build_indexes, embed_text
-from rank import rank
+from rank import DEFAULT_RANKER_PATH, FittedRanker, load_fitted_ranker, rank
 from retrieval import retrieve
 from state import (
     SessionState,
@@ -72,10 +73,14 @@ class Agent:
         keeping retrieval and extraction on one catalogue representation.
 
         A fitted ranker (§3.4 Step 6, §8.3 step C5) is not threaded through
-        the constructor, because the baseline contract has no such
-        parameter; once C5 delivers one, rank.py's `rank()` should default
-        to loading it internally rather than this method growing a
-        baseline-incompatible argument.
+        the constructor as a parameter, because the baseline contract has
+        no such parameter — instead, loaded internally here from
+        `models/ranker.json` (rank.DEFAULT_RANKER_PATH) when present, per
+        this docstring's own earlier note ("rank()'s should default to
+        loading it internally"). Falls back to `None` (HANDSET_WEIGHTS via
+        rank()'s own default) when no fitted ranker has been persisted yet
+        — a fresh clone before scripts/fit_ranker.py has run must still
+        work, just with the hand-set weights rather than a fitted model.
 
         Args:
             catalog_path: Path to catalog.jsonl. load_catalog() falls back
@@ -93,6 +98,11 @@ class Agent:
         self.gazetteer: AttributeGazetteer = build_attribute_gazetteer(
             self.indexes.catalog
         )
+        self.ranker: Optional[FittedRanker] = None
+        try:
+            self.ranker = load_fitted_ranker(DEFAULT_RANKER_PATH)
+        except FileNotFoundError:
+            pass
         self.sessions: dict[str, SessionState] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
@@ -157,7 +167,7 @@ class Agent:
             # extract.py already implements is unreachable dead code.
             set_pending_clarification(state, ask_attribute)
 
-        ranked_asins = rank(pool, state, self.indexes, top_k=top_k)
+        ranked_asins = rank(pool, state, self.indexes, ranker=self.ranker, top_k=top_k)
 
         log_turn(
             session_id=state.session_id,
