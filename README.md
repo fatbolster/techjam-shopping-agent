@@ -33,6 +33,33 @@ Full design rationale and data measurements live in
 An audit of the implementation against that document and against the
 supplied evaluator is in [`docs/DESIGN_AUDIT.md`](docs/DESIGN_AUDIT.md).
 
+## Architecture at a glance
+
+One pass per turn: extract slots from the message, rebuild and re-embed the
+canonical intent, route buy/browse, retrieve from three streams, decide
+whether to ask a clarifying question, rank, log. See §3-§4 of the design
+doc for the full rationale and system diagram.
+
+| Module | Owns | Design doc |
+|---|---|---|
+| `agents/our_agent.py` | `Agent` — wires everything into `reset()`/`respond()` | §4 |
+| `agents/baseline_agent.py` | The kit's reference baseline, kept for comparison | §5.1 |
+| `utils.py` | `product_text()`, the shared `Candidate` shape | §3.2, §7.2 |
+| `indexes.py` | FTS5, embedding matrix, facts dict, category lists | §3.2 |
+| `retrieval.py` | Three streams, union, floor check | §3.4 Step 4 |
+| `extract.py` | Slot extraction, negation, merge policy | §3.4 Step 1 |
+| `state.py` | Slot dict, scenario buffer, canonical render, routing | §3.3, §3.4 Steps 2-3 |
+| `features.py` | The ten ranking features | §3.4 Step 6 |
+| `rank.py` | Scoring, logistic regression fit, LLM rerank | §3.4 Step 6, §6.6 |
+| `clarify.py` | Entropy x answerability clarification policy | §3.4 Step 5 |
+| `telemetry.py` | Append-only JSONL logging, training corpus | §3.4 Step 7, §6.6 |
+| `simulate.py` | User simulator, for our own corpus generation | §6.5.2 |
+| `evaluate.py` | Our own Hit@10/MRR/MTTC scorer, for fast local iteration | §6.1 |
+| `ablate.py` | Ablation harness, scenario slicing | §6.3-§6.4 |
+| `scripts/check_data.py` | Verifies `data/` has what a clean clone needs | §8.0 |
+| `scripts/fit_ranker.py` | Fits the ranker on the logged feature matrix | §6.6 |
+| `scripts/report_ranker.py` | Fitted weights, correlations, near-zero flags | §6.3, §2.4 |
+
 ## Requirements and setup
 
 Python 3.12. From the repo root:
