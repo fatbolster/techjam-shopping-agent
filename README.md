@@ -30,17 +30,21 @@ kit arrived; see D1's note in the Chellappan section below.
 
 | Metric | Overall | buying | browsing | intent_override | boundary |
 |---|---|---|---|---|---|
-| Hit Rate@10 | 0.525 | 0.588 | 0.438 | 0.567 | 0.600 |
-| MRR | 0.272 | 0.278 | 0.234 | 0.310 | 0.417 |
-| MTTC | 6.32 | 5.31 | 7.24 | 6.80 | 5.50 |
-| Efficiency | 0.469 | — | — | — | — |
-| **Technical score** | **0.438** | — | — | — | — |
+| Hit Rate@10 | 0.580 | 0.638 | 0.513 | 0.633 | 0.500 |
+| MRR | 0.302 | 0.297 | 0.279 | 0.399 | 0.228 |
+| MTTC | 5.73 | 4.79 | 6.38 | 6.30 | 6.30 |
+| Efficiency | 0.528 | — | — | — | — |
+| **Technical score** | **0.486** | — | — | — | — |
 
 (`recommended_technical_score = 0.50·HitRate + 0.30·MRR + 0.20·Efficiency`,
-per the evaluator's own formula.) Full per-session detail in `results/output.json`.
-`evaluate.py`'s own §6.1-formula scorer remains useful for fast local
-iteration (it doesn't need a full evaluator round-trip), but these are now
-the headline numbers.
+per the evaluator's own formula.) Full per-session detail in
+`results/output.json`. These numbers are *with* the fitted ranker
+(`models/ranker.json`) wired in — an earlier run before that fix scored
+0.525/0.272/6.32/0.438 on the same four metrics, using unfitted
+`HANDSET_WEIGHTS` instead (see agent.py's commit history: `respond()`
+wasn't passing a ranker to `rank()` at all). `evaluate.py`'s own
+§6.1-formula scorer remains useful for fast local iteration (it doesn't
+need a full evaluator round-trip), but these are now the headline numbers.
 
 ## Setup
 
