@@ -582,13 +582,19 @@ Revised after the §4 measurements. Score at time of writing: **0.616**
 | | Finding | Status | Why |
 |---|---|---|---|
 | — | **DC-3 + D-6** asking policy | ✅ **done, +0.130** | 71.7% of turns disclosed nothing; two constants |
-| 1 | **N-1 + D-2/V-7** track & department filter | open | 98.3% buy track means the junk-department filter runs on ~every turn, including all 80 browsing sessions that must never filter. Targets the **52 never-retrieved** sessions |
-| 2 | **D-1** override phrasing | open | intent_override has the worst ranking loss of any slice (0.267 against 0.900 pool recall). Targets the **32 in-pool-but-unranked** |
-| 3 | **D-7** brand over-asking | open | Now more impactful, since we ask far more often; grid-searchable (E7) |
-| 4 | **D-3 / D-4** feature stubs | open | Latent; near-zero score impact, but they pollute the ablation table's interpretability |
-| 5 | Doc edits DC-1…DC-6, N-1 | open | No runtime effect |
+| — | **N-1 + D-2/V-7** department filter | ✅ **done, +0.026** | Turned off after the §6.3 ablation showed it only costs recall (0.6155 → 0.6410, MRR flat, buying identical). Confirmed twice: standalone ablation and a clean two-arm A/B |
+| 1 | **D-1** override phrasing | open | intent_override has the worst ranking loss of any slice (0.267 against 0.900 pool recall). Targets the **32 in-pool-but-unranked** |
+| 2 | **D-7** brand over-asking | open | Now more impactful, since we ask far more often; grid-searchable (E7) |
+| 3 | **D-3 / D-4** feature stubs | open | Latent; near-zero score impact, but they pollute the ablation table's interpretability |
+| 4 | Doc edits DC-1…DC-6, N-1 | open | No runtime effect |
 
-Items 1 and 2 partition the remaining 84→50 misses almost exactly:
-retrieval loss (52 sessions) and ranking loss (32 sessions) respectively.
-Neither was visible from the aggregate metrics alone — both required the
-pool-recall instrumentation in §4.
+Score after both completed fixes: **0.641** (Hit@10 0.790, MRR 0.386),
+from 0.486 when the audit was written.
+
+D-1 remains the largest open item: intent_override still carries the worst
+ranking loss of any slice, and it targets the in-pool-but-unranked
+sessions that retrieval fixes cannot reach. Note the department-filter fix
+already lifted intent_override from 0.667 to 0.733 as a side effect (its
+targets were among those being deleted), so D-1's remaining headroom is
+smaller than the original 0.267 figure suggests — worth re-measuring pool
+recall before spending effort there.

@@ -92,7 +92,36 @@ def test_keyword_stream_unfiltered_on_browse_track(indexes, state_browse):
     assert all(c.sources == {"keyword"} for c in results)
 
 
-def test_keyword_stream_filters_by_department_on_buy_track(indexes, state_buy):
+@pytest.fixture
+def department_filter_on():
+    """Force the department filter on for one test, then restore whatever
+    the module default is. The default is now False (measured: it only
+    costs recall — see DEPARTMENT_FILTER_ENABLED's comment in
+    retrieval.py), so tests of the filter's *behaviour* must opt in
+    explicitly rather than rely on the default."""
+    original = retrieval.DEPARTMENT_FILTER_ENABLED
+    retrieval.DEPARTMENT_FILTER_ENABLED = True
+    try:
+        yield
+    finally:
+        retrieval.DEPARTMENT_FILTER_ENABLED = original
+
+
+def test_department_filter_defaults_off(indexes, state_buy):
+    """Regression guard on the measured decision: with the default flag,
+    a stated department must NOT delete other departments' candidates.
+    Turning this back on cost 0.0255 technical score over 200 sessions."""
+    assert retrieval.DEPARTMENT_FILTER_ENABLED is False
+    state_buy.slots["department"] = "Men"
+    results = keyword_stream(state_buy, indexes, quota=50)
+    assert any(indexes.facts[c.asin]["dept"] != "Men" for c in results)
+
+
+def test_keyword_stream_filters_by_department_on_buy_track(
+    indexes, state_buy, department_filter_on
+):
+    """The filter still works when explicitly enabled — the ablation
+    harness needs both arms (§6.3), so this path is retained, not deleted."""
     state_buy.slots["department"] = "Men"
     results = keyword_stream(state_buy, indexes, quota=50)
     depts = {indexes.facts[c.asin]["dept"] for c in results}
@@ -106,17 +135,21 @@ def test_department_filter_enabled_toggle_disables_the_buy_track_filter(indexes,
     parameter to keyword_stream()/retrieve() — Agent.respond()'s fixed
     signature has nowhere to carry such a flag through."""
     state_buy.slots["department"] = "Men"
-    with_filter = keyword_stream(state_buy, indexes, quota=50)
-    retrieval.DEPARTMENT_FILTER_ENABLED = False
+    original = retrieval.DEPARTMENT_FILTER_ENABLED
     try:
+        retrieval.DEPARTMENT_FILTER_ENABLED = True
+        with_filter = keyword_stream(state_buy, indexes, quota=50)
+        retrieval.DEPARTMENT_FILTER_ENABLED = False
         without_filter = keyword_stream(state_buy, indexes, quota=50)
     finally:
-        retrieval.DEPARTMENT_FILTER_ENABLED = True
+        retrieval.DEPARTMENT_FILTER_ENABLED = original
     assert len(without_filter) >= len(with_filter)
     assert any(indexes.facts[c.asin]["dept"] != "Men" for c in without_filter)
 
 
-def test_keyword_stream_department_filter_is_case_insensitive(indexes, state_buy):
+def test_keyword_stream_department_filter_is_case_insensitive(
+    indexes, state_buy, department_filter_on
+):
     state_buy.slots["department"] = "men"  # lowercase, catalogue has "Men"
     results = keyword_stream(state_buy, indexes, quota=50)
     assert len(results) > 0
