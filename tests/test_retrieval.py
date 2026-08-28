@@ -23,6 +23,7 @@ from retrieval import (
     semantic_stream,
     union_dedupe,
 )
+import retrieval
 from state import SessionState
 from utils import Candidate
 
@@ -97,6 +98,22 @@ def test_keyword_stream_filters_by_department_on_buy_track(indexes, state_buy):
     depts = {indexes.facts[c.asin]["dept"] for c in results}
     assert depts <= {"Men"}
     assert len(results) > 0  # the filter didn't zero out a department that does exist
+
+
+def test_department_filter_enabled_toggle_disables_the_buy_track_filter(indexes, state_buy):
+    """The ablation harness (ablate.py, '-department_filter') flips this
+    module-level flag for a full pipeline re-run rather than adding a
+    parameter to keyword_stream()/retrieve() — Agent.respond()'s fixed
+    signature has nowhere to carry such a flag through."""
+    state_buy.slots["department"] = "Men"
+    with_filter = keyword_stream(state_buy, indexes, quota=50)
+    retrieval.DEPARTMENT_FILTER_ENABLED = False
+    try:
+        without_filter = keyword_stream(state_buy, indexes, quota=50)
+    finally:
+        retrieval.DEPARTMENT_FILTER_ENABLED = True
+    assert len(without_filter) >= len(with_filter)
+    assert any(indexes.facts[c.asin]["dept"] != "Men" for c in without_filter)
 
 
 def test_keyword_stream_department_filter_is_case_insensitive(indexes, state_buy):

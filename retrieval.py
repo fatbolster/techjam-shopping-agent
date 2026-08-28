@@ -54,6 +54,16 @@ CATEGORY_DIVERSITY_MAX_SHARE = 0.3
 # least-confident constraint and re-retrieve (§3.4 Step 4).
 POOL_FLOOR = 50
 
+# Module-level toggle rather than a keyword_stream()/retrieve() parameter,
+# so the ablation harness (ablate.py, §6.3 "-department_filter") can
+# disable the buy-track department/category filter for a full pipeline
+# re-run through the unmodified, already-real Agent/retrieve() path —
+# Agent.respond()'s signature is fixed to match the evaluator's baseline
+# exactly (§4, agent.py's docstring: "no added/removed/reordered
+# parameters"), so an ablation flag can't be threaded through it as an
+# argument. STREAM_QUOTAS is overridden the same way for stream ablations.
+DEPARTMENT_FILTER_ENABLED = True
+
 
 def _dept_of(asin: str, indexes: Indexes) -> str:
     """facts[asin]['dept'], or a stable placeholder when unknown/absent.
@@ -101,7 +111,7 @@ def keyword_stream(state: SessionState, indexes: Indexes, quota: int) -> list[Ca
     """
     hits = keyword_search(indexes.fts_conn, state.canonical_intent, quota * KEYWORD_OVERFETCH)
 
-    if state.track == "buy":
+    if state.track == "buy" and DEPARTMENT_FILTER_ENABLED:
         department = state.slots.get("department")
         category = state.slots.get("category")
         filtered = []
