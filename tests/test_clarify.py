@@ -231,9 +231,24 @@ def test_pick_attribute_respects_already_asked_attributes(indexes, pool):
 
 
 def test_pick_attribute_respects_session_cap(indexes, pool):
+    """Once MAX_CLARIFICATIONS_PER_SESSION questions have been asked, no
+    further question is returned. Derives the fixture from the constant
+    rather than hardcoding a count, so tuning the cap (see its docstring
+    in clarify.py) doesn't require editing this test — the *behaviour*
+    under test is the cap binding, not its particular value."""
     state = SessionState(session_id="s4")
-    state.asked_attributes = {"category", "brand", "color"}
-    assert len(state.asked_attributes) == MAX_CLARIFICATIONS_PER_SESSION
+    n = min(MAX_CLARIFICATIONS_PER_SESSION, len(ANSWERABILITY_PRIOR))
+    state.asked_attributes = set(list(ANSWERABILITY_PRIOR)[:n])
+    assert pick_attribute(pool, state, indexes=indexes) is None
+
+
+def test_pick_attribute_returns_none_once_every_attribute_has_been_asked(indexes, pool):
+    """Independent of the numeric cap: pick_attribute() never repeats a
+    question (it filters on `attr not in state.asked_attributes`), so once
+    all nine askable attributes are used up it must return None even if
+    MAX_CLARIFICATIONS_PER_SESSION is set above nine and never binds."""
+    state = SessionState(session_id="s4b")
+    state.asked_attributes = set(ANSWERABILITY_PRIOR)
     assert pick_attribute(pool, state, indexes=indexes) is None
 
 
