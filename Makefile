@@ -1,4 +1,4 @@
-.PHONY: data setup test
+.PHONY: data setup test evaluate
 
 # §8.0: "Never commit large binaries to the repo directly; ship a `make
 # data` download script instead." §8.5 step E9. See scripts/check_data.py
@@ -13,3 +13,11 @@ setup:
 
 test:
 	python3 -m pytest
+
+# Runs the organizer's local evaluator (evaluator/evaluator.py) against our
+# real Agent (starter/agent.py) over all 200 public sessions. Output goes
+# to results/, not the repo root, so every run is kept in one place rather
+# than scattered loose files.
+evaluate:
+	mkdir -p results
+	python3 -m evaluator.evaluator --output results/output.json

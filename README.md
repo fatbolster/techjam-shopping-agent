@@ -23,7 +23,7 @@ per-owner sections below for specifics.
 
 ## Official evaluator results
 
-Run via `python3 -m evaluator.evaluator --output output.json` (from repo
+Run via `make evaluate` (or `python3 -m evaluator.evaluator --output results/output.json`, from repo
 root; needs `starter` importable as a package). The evaluator bundles its
 own user simulator — configuration A (§6.5.1), resolved for real once the
 kit arrived; see D1's note in the Chellappan section below.
@@ -37,7 +37,7 @@ kit arrived; see D1's note in the Chellappan section below.
 | **Technical score** | **0.438** | — | — | — | — |
 
 (`recommended_technical_score = 0.50·HitRate + 0.30·MRR + 0.20·Efficiency`,
-per the evaluator's own formula.) Full per-session detail in `output.json`.
+per the evaluator's own formula.) Full per-session detail in `results/output.json`.
 `evaluate.py`'s own §6.1-formula scorer remains useful for fast local
 iteration (it doesn't need a full evaluator round-trip), but these are now
 the headline numbers.
@@ -49,7 +49,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python3 agent.py   # smoke test: three fixture turns, printed responses
-python3 -m evaluator.evaluator --output output.json   # full 200-session official score
+make evaluate   # full 200-session official score -> results/output.json
 ```
 
 Real data (`catalog.jsonl`, `public_set.jsonl`, the embedding matrix) is
