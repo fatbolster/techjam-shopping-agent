@@ -33,15 +33,15 @@ kit arrived; see D1's note in the Chellappan section below.
 
 | Metric | Overall | buying | browsing | intent_override | boundary |
 |---|---|---|---|---|---|
-| Hit Rate@10 | 0.750 | 0.775 | 0.762 | 0.667 | 0.700 |
-| MRR | 0.384 | 0.371 | 0.399 | 0.413 | 0.287 |
-| MTTC | 4.74 | — | — | — | — |
-| Efficiency | 0.626 | — | — | — | — |
-| **Technical score** | **0.616** | — | — | — | — |
+| Hit Rate@10 | 0.790 | 0.775 | 0.838 | 0.733 | 0.700 |
+| MRR | 0.386 | 0.361 | 0.407 | 0.430 | 0.287 |
+| MTTC | 4.49 | — | — | — | — |
+| Efficiency | 0.651 | — | — | — | — |
+| **Technical score** | **0.641** | — | — | — | — |
 
 For reference, the kit's own baseline agent (`agents/baseline_agent.py`,
 scored into `results/baseline.json`) gets Hit Rate@10 0.125, MRR 0.068,
-technical score **0.107** — this pipeline is **5.8x** that.
+technical score **0.107** — this pipeline is **6.0x** that.
 
 (`recommended_technical_score = 0.50·HitRate + 0.30·MRR + 0.20·Efficiency`,
 per the evaluator's own formula.) Full per-session detail in
@@ -53,7 +53,8 @@ Score history on this evaluator, each step measured not assumed:
 |---|---:|---:|---:|---:|
 | hand-set ranking weights | 0.525 | 0.272 | 6.32 | 0.438 |
 | + fitted ranker actually wired in | 0.580 | 0.302 | 5.73 | 0.486 |
-| + clarification policy retuned to the evaluator | **0.750** | **0.384** | **4.74** | **0.616** |
+| + clarification policy retuned to the evaluator | 0.750 | 0.384 | 4.74 | 0.616 |
+| + department filter turned off | **0.790** | **0.386** | **4.49** | **0.641** |
 
 The last step changed two constants in `clarify.py` (`ASK_THRESHOLD`,
 `MAX_CLARIFICATIONS_PER_SESSION`) after measuring that the evaluator's

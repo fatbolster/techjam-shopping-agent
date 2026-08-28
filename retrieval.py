@@ -62,7 +62,42 @@ POOL_FLOOR = 50
 # exactly (§4, agent.py's docstring: "no added/removed/reordered
 # parameters"), so an ablation flag can't be threaded through it as an
 # argument. STREAM_QUOTAS is overridden the same way for stream ablations.
-DEPARTMENT_FILTER_ENABLED = True
+#
+# DEFAULTS OFF. §6.3 lists "-department_filter" as an open question
+# ("Does filtering help or hurt on balance? Hit@10 may rise while MRR
+# falls — the trade must be read jointly"). We ran it over all 200 public
+# sessions with the supplied evaluator; the answer is that it only hurts:
+#
+#     metric            filter ON   filter OFF
+#     Hit Rate@10          0.750       0.790
+#     MRR                  0.3845      0.3860
+#     MTTC                 4.74        4.49
+#     technical score      0.6155      0.6410
+#
+# The predicted trade did not occur — MRR is flat (+0.0015), so there is
+# no precision gain to weigh against the recall loss. Per scenario, the
+# damage is concentrated exactly where §3.4 Step 4 says filtering should
+# never have been happening: browsing 0.762 -> 0.838, intent_override
+# 0.667 -> 0.733, while buying is *identical* (0.775) either way — the
+# filter earns nothing even on the one track it exists to serve.
+#
+# MECHANISM (docs/DESIGN_AUDIT.md D-2/V-7, N-1). The filter compares the
+# user's stated department against a candidate's `categories[1]`. That
+# field is 100% populated but only ~80% meaningful: 203 distinct values,
+# with store/product-type buckets like "Boot Shop" and "Novelty & More"
+# occupying the rest. So a *correct* filter for "Men" deletes a target
+# whose own categories[1] is "Boot Shop" — a men's boot, removed for not
+# being labelled "Men". 30 of the 200 public targets (15%) sit under such
+# a value. Compounding it, `pick_track()` returns "buy" on any specific
+# category slot and the evaluator opens every session with "I'm looking
+# for {category}...", so the buy track runs on 98.3% of turns (1,043 vs
+# 18) — the filter fires on browsing sessions too, which §3.4 Step 4 says
+# must never filter.
+#
+# Set True to restore the old behaviour, or for the ablation harness to
+# measure it. The code path is retained deliberately rather than deleted:
+# §6.3's ablation table is evidence in the writeup and needs both arms.
+DEPARTMENT_FILTER_ENABLED = False
 
 
 def _dept_of(asin: str, indexes: Indexes) -> str:
