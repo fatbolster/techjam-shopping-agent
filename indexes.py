@@ -2,24 +2,26 @@
 
 Design doc §3.2 (Offline stage) and §4 (System diagram, "OFFLINE" block).
 
-Owner: Haojun (Indexes and retrieval). §8.1, step A2 (stub retrieve — see
-retrieval.py), step A3 (facts dict + per-category lists), step A4 (FTS5),
-step A5 (embedding matrix), step A6 (brute-force kNN).
+Owner: Haojun (Indexes and retrieval). §8.1, step A3 (facts dict +
+per-category lists), step A4 (FTS5), step A5 (embedding matrix), step A6
+(brute-force kNN).
 
 All four indexes are derived from utils.product_text() so they cannot
-silently diverge (§3.2, §7.2). Everything below is a stub: no model is
-downloaded, no SQLite table is populated, no matrix is built. Function
-bodies return fixture values only.
+silently diverge (§3.2, §7.2). A3-A6 are real; knn_search() (A6) was
+already real even before A3-A5 landed (matmul + argpartition needs no
+catalogue-specific logic, only real inputs to run over).
 """
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
-
-from utils import fixture_score
 
 
 @dataclass
@@ -50,6 +52,17 @@ class Indexes:
     category_lists: dict[str, list[str]]
 
 
+# Column weights for bm25(), in FTS5_COLUMNS order after the leading
+# UNINDEXED asin column (§3.2 Index 1: "title 6.0, categories 4.0,
+# features 2.5, details 2.5, store 1.5, description 1.0"). asin's own
+# weight (0.0) is never scored — UNINDEXED columns take no part in MATCH —
+# but bm25() still expects one positional argument per table column.
+FTS5_COLUMNS: list[str] = ["title", "categories", "features", "details", "store", "description"]
+FTS5_WEIGHTS: list[float] = [6.0, 4.0, 2.5, 2.5, 1.5, 1.0]
+
+_FTS5_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+
+
 def build_fts5_index(catalog: list[dict]) -> sqlite3.Connection:
     """Build the SQLite FTS5 keyword index over the catalogue.
 
@@ -58,17 +71,68 @@ def build_fts5_index(catalog: list[dict]) -> sqlite3.Connection:
     baseline: title 6.0, categories 4.0, features 2.5, details 2.5, store
     1.5, description 1.0." Owner Haojun, §8.1 step A4.
 
-    STUB: returns an empty in-memory SQLite connection with no virtual
-    table populated. Real implementation creates an FTS5 virtual table over
-    product_text()'s constituent columns with the weights above.
+    Six columns hold the raw fields directly (not product_text()'s single
+    blob), so each can carry its own bm25() weight via FTS5_WEIGHTS —
+    product_text() feeds the *embedding* matrix and the facts blob, not
+    this table (see utils.product_text()'s docstring). `asin` is stored
+    UNINDEXED (present for retrieval, excluded from MATCH/scoring).
 
     Args:
         catalog: Raw catalogue rows.
 
     Returns:
-        A SQLite connection (fixture: empty, in-memory).
+        An in-memory SQLite connection with the populated `products` FTS5
+        virtual table.
     """
-    return sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:")
+    columns_sql = ", ".join(FTS5_COLUMNS)
+    conn.execute(
+        f"CREATE VIRTUAL TABLE products USING fts5("
+        f"asin UNINDEXED, {columns_sql}, "
+        f"tokenize='unicode61 remove_diacritics 2')"
+    )
+    rows = []
+    for row in catalog:
+        details = row.get("details") or {}
+        rows.append(
+            (
+                row.get("parent_asin", ""),
+                str(row.get("title") or ""),
+                " ".join(str(c) for c in (row.get("categories") or [])),
+                " ".join(str(f) for f in (row.get("features") or [])),
+                " ".join(str(v) for v in details.values()),
+                str(row.get("store") or ""),
+                " ".join(str(d) for d in (row.get("description") or [])),
+            )
+        )
+    placeholders = ", ".join(["?"] * (1 + len(FTS5_COLUMNS)))
+    conn.executemany(f"INSERT INTO products VALUES ({placeholders})", rows)
+    conn.commit()
+    return conn
+
+
+def _fts5_match_query(query: str) -> Optional[str]:
+    """Turn a free-text query into a forgiving FTS5 MATCH expression.
+
+    OR-joins double-quoted tokens (rather than FTS5's implicit AND between
+    bareword terms) so a query with one uncatalogued word still matches
+    products sharing any of the others — the keyword stream is meant to
+    over-fetch and get filtered/truncated downstream, not to be a strict
+    boolean filter itself. Tokens are alphanumeric only (`\\w` minus `_`,
+    via _FTS5_TOKEN_RE) and individually double-quoted so punctuation in
+    `query` (":", "$", multi-value list separators) can't break FTS5's
+    MATCH syntax or be misread as a column filter / operator.
+
+    Args:
+        query: Free text, e.g. a rendered canonical_intent string.
+
+    Returns:
+        An FTS5 MATCH expression, or None if `query` has no word tokens.
+    """
+    tokens = _FTS5_TOKEN_RE.findall(query or "")
+    if not tokens:
+        return None
+    return " OR ".join(f'"{t}"' for t in tokens)
 
 
 def keyword_search(
@@ -81,9 +145,6 @@ def keyword_search(
     retrieval boundary so all downstream code treats higher as better."
     Owner Haojun, §8.1 step A4: "Returns (asin, score) pairs."
 
-    STUB: ignores `conn` and `query`; returns up to `limit` fixture ASINs
-    from utils.FIXTURE_CATALOG with deterministic pseudo-scores.
-
     Args:
         conn: An FTS5-backed SQLite connection from build_fts5_index().
         query: The canonical intent string (or a slot-derived query).
@@ -92,11 +153,43 @@ def keyword_search(
 
     Returns:
         (asin, score) pairs, higher score is better, length <= limit.
+        Empty if `query` has no matchable tokens or nothing matches.
     """
-    from utils import FIXTURE_CATALOG
+    match_expr = _fts5_match_query(query)
+    if match_expr is None or limit <= 0:
+        return []
+    weights_sql = ", ".join(str(w) for w in FTS5_WEIGHTS)
+    cursor = conn.execute(
+        f"SELECT asin, bm25(products, 0.0, {weights_sql}) AS score "
+        f"FROM products WHERE products MATCH ? ORDER BY score LIMIT ?",
+        (match_expr, limit),
+    )
+    # bm25(): more negative is better; sign-correct once at this boundary.
+    return [(asin, -score) for asin, score in cursor.fetchall()]
 
-    rows = FIXTURE_CATALOG[:limit]
-    return [(row["parent_asin"], fixture_score(row["parent_asin"] + query)) for row in rows]
+
+# sentence-transformers/torch are imported lazily (inside _get_model(), not
+# at module level) so indexes.py stays importable without them — same
+# reasoning as rank.py's lazy sklearn import (§9: "Pipeline is fully
+# functional with zero LLM calls" extends to "no model download required
+# just to import a module").
+_EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384
+_model_singleton: list = []  # 0 or 1 elements; avoids a `global` rebind
+
+
+def _get_embedding_model():
+    """Lazily load and cache the one shared SentenceTransformer instance.
+
+    A module-level singleton (rather than reloading per call) since
+    encode() is what's expensive; embed_text() is called once per turn
+    (canonical-intent embedding) and must stay fast after the first call.
+    """
+    if not _model_singleton:
+        from sentence_transformers import SentenceTransformer
+
+        _model_singleton.append(SentenceTransformer(_EMBEDDING_MODEL_NAME))
+    return _model_singleton[0]
 
 
 def embed_text(text: str) -> np.ndarray:
@@ -106,25 +199,23 @@ def embed_text(text: str) -> np.ndarray:
     dimensions, used frozen." Also used for canonical-intent embedding
     (§3.4 Step 2), so query and products occupy one space. Owner Haojun, step A5.
 
-    STUB: returns a deterministic 384-d vector derived from a hash of
-    `text`, L2-normalised, without loading any model. Keeps the pipeline
-    runnable without a network fetch or the sentence-transformers
-    dependency installed.
-
     Args:
         text: Any string to embed (a product's product_text() or a
-            canonical intent string).
+            canonical intent string). An empty string still returns a
+            valid (if not meaningful) unit vector — MiniLM has no
+            empty-input special case.
 
     Returns:
-        A (384,) float32 unit vector.
+        A (384,) float32 unit vector, L2-normalised.
     """
-    seed = abs(hash(text)) % (2**32)
-    rng = np.random.default_rng(seed)
-    vec = rng.standard_normal(384).astype(np.float32)
-    return vec / np.linalg.norm(vec)
+    model = _get_embedding_model()
+    vec = model.encode([text], normalize_embeddings=True)[0]
+    return np.asarray(vec, dtype=np.float32)
 
 
-def build_embedding_matrix(catalog: list[dict]) -> tuple[np.ndarray, list[str]]:
+def build_embedding_matrix(
+    catalog: list[dict], cache_path: Optional[str] = "data/embeddings.npy"
+) -> tuple[np.ndarray, list[str]]:
     """Encode the whole catalogue into one L2-normalised matrix.
 
     Design doc §3.2 Index 2: "All 50,000 product texts are encoded once
@@ -132,11 +223,19 @@ def build_embedding_matrix(catalog: list[dict]) -> tuple[np.ndarray, list[str]]:
     reduces to a dot product ... persisted as .npy so subsequent runs load
     in under a second." Owner Haojun, §8.1 step A5.
 
-    STUB: encodes utils.product_text() (itself a stub) for every row via
-    embed_text(); no .npy persistence is implemented.
+    Batch-encodes utils.product_text() for every row in one model.encode()
+    call (far faster than one embed_text() call per row). When `cache_path`
+    is given and both it and its sibling `<cache_path>.asins.json` exist
+    with an ASIN list matching `catalog` exactly (order and content — the
+    cheap correctness check the design doc's "loads in under a second"
+    claim implicitly assumes holds), the cached matrix is loaded instead of
+    re-encoding. Both paths are gitignored (`*.npy`, `data/`), matching the
+    embedding matrix's "large derived artifact, never committed" status.
 
     Args:
         catalog: Raw catalogue rows.
+        cache_path: Where to persist/load the matrix, or None to always
+            encode fresh and skip persistence (e.g. in tests).
 
     Returns:
         (matrix, asins) where matrix is (len(catalog), 384) float32 and
@@ -145,7 +244,32 @@ def build_embedding_matrix(catalog: list[dict]) -> tuple[np.ndarray, list[str]]:
     from utils import product_text
 
     asins = [row["parent_asin"] for row in catalog]
-    matrix = np.stack([embed_text(product_text(row)) for row in catalog]).astype(np.float32)
+
+    if cache_path is not None:
+        asins_path = Path(f"{cache_path}.asins.json")
+        matrix_path = Path(cache_path)
+        if matrix_path.exists() and asins_path.exists():
+            with open(asins_path, encoding="utf-8") as f:
+                cached_asins = json.load(f)
+            if cached_asins == asins:
+                return np.load(matrix_path), asins
+
+    if not catalog:
+        return np.zeros((0, EMBEDDING_DIM), dtype=np.float32), asins
+
+    model = _get_embedding_model()
+    texts = [product_text(row) for row in catalog]
+    matrix = np.asarray(
+        model.encode(texts, normalize_embeddings=True, show_progress_bar=False), dtype=np.float32
+    )
+
+    if cache_path is not None:
+        matrix_path = Path(cache_path)
+        matrix_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(matrix_path, matrix)
+        with open(f"{cache_path}.asins.json", "w", encoding="utf-8") as f:
+            json.dump(asins, f)
+
     return matrix, asins
 
 
@@ -191,58 +315,83 @@ def build_facts_dict(catalog: list[dict]) -> dict[str, dict]:
     is taken from categories[1] (100% coverage) rather than
     details.Department (87%)." Owner Haojun, §8.1 step A3.
 
-    STUB: returns one fixture record per row in `catalog`, with `pop`
-    computed for real (it is a one-line, non-controversial formula given in
-    the doc) but `dept`/`cat3`/`blob` left as fixture placeholders.
+    `cat3` is the next category level down, `categories[2]` — the third
+    entry overall (`categories[0]` is the top-level "Clothing, Shoes &
+    Jewelry"-style root, `categories[1]` is dept). `blob` is
+    `utils.product_text(row)` lowercased, reusing the one shared text view
+    rather than re-deriving a second join (§3.2/§7.2: "so the indexes
+    cannot silently diverge").
 
     Args:
         catalog: Raw catalogue rows.
 
     Returns:
         asin -> {dept, cat3, store, price, rating_number, pop, rating, blob}
+        `dept`/`cat3` are None when `categories` is too short to hold them.
     """
+    from utils import product_text
+
     facts: dict[str, dict] = {}
     for row in catalog:
         asin = row["parent_asin"]
         rn = row.get("rating_number", 0) or 0
+        categories = row.get("categories") or []
         facts[asin] = {
-            "dept": "[STUB dept]",
-            "cat3": "[STUB cat3]",
+            "dept": categories[1] if len(categories) > 1 else None,
+            "cat3": categories[2] if len(categories) > 2 else None,
             "store": row.get("store"),
             "price": row.get("price"),
             "rating_number": rn,
             "pop": float(np.log1p(rn) / np.log1p(100_000)),
             "rating": row.get("average_rating"),
-            "blob": "[STUB blob]",
+            "blob": product_text(row).lower(),
         }
     return facts
 
 
+# Bucket key for candidates whose category is unknown (categories too short
+# to hold a dept) — keeps every ASIN groupable without dropping any from
+# the popularity stream's source lists.
+UNKNOWN_CATEGORY = "[unknown department]"
+
+
 def build_category_lists(catalog: list[dict], facts: dict[str, dict]) -> dict[str, list[str]]:
-    """Group ASINs by category path, each list pre-sorted by review count.
+    """Group ASINs by department, each list pre-sorted by review count.
 
     Design doc §3.2 Index 3: "A companion structure groups ASINs by
     category path with each list pre-sorted by review count, making
     'bestsellers in this category' a list slice rather than a scan."
     Haojun, §8.1 step A3.
 
-    STUB: returns a single fixture bucket "[STUB category]" containing all
-    ASINs in `catalog`, sorted by rating_number descending (the sort is
-    real; the category grouping is not).
+    Grouped by `dept` (`facts[asin]["dept"]`, i.e. `categories[1]`) rather
+    than the full category path: dept is the one level with 100% coverage
+    (§3.2's justification for using it over `details.Department` in the
+    first place carries over here), and it is what popularity_stream()
+    reads via "the pool's modal categories" (§3.4 Step 4) — a finer path
+    would fragment lists past the point a 20-candidate popularity quota
+    could usefully slice.
 
     Args:
         catalog: Raw catalogue rows.
-        facts: Output of build_facts_dict(), for the sort key.
+        facts: Output of build_facts_dict(), for dept/rating_number.
 
     Returns:
-        category path -> ASINs, descending by rating_number.
+        dept -> ASINs (or UNKNOWN_CATEGORY for rows with no dept),
+        each list descending by rating_number.
     """
-    asins = [row["parent_asin"] for row in catalog]
-    asins.sort(key=lambda a: facts.get(a, {}).get("rating_number", 0), reverse=True)
-    return {"[STUB category]": asins}
+    buckets: dict[str, list[str]] = {}
+    for row in catalog:
+        asin = row["parent_asin"]
+        dept = facts.get(asin, {}).get("dept") or UNKNOWN_CATEGORY
+        buckets.setdefault(dept, []).append(asin)
+    for asins in buckets.values():
+        asins.sort(key=lambda a: facts.get(a, {}).get("rating_number", 0), reverse=True)
+    return buckets
 
 
-def build_indexes(catalog: list[dict] | None = None) -> Indexes:
+def build_indexes(
+    catalog: list[dict] | None = None, embedding_cache_path: Optional[str] = "data/embeddings.npy"
+) -> Indexes:
     """Run the full offline stage and bundle the result.
 
     Design doc §3.2: "Runs once at startup, in roughly 5 seconds plus
@@ -250,7 +399,14 @@ def build_indexes(catalog: list[dict] | None = None) -> Indexes:
 
     Args:
         catalog: Raw catalogue rows, or None to load via
-            utils.load_catalog() (itself a stub returning fixture rows).
+            utils.load_catalog() (falls back to the 3-row FIXTURE_CATALOG
+            when data/catalog.jsonl is absent).
+        embedding_cache_path: Passed through to build_embedding_matrix().
+            Callers passing a small/fixture `catalog` (tests, Agent's
+            fixture path) should pass None here — otherwise a fixture-sized
+            matrix can overwrite the real cached embeddings.npy on disk the
+            next time the catalog's ASIN set doesn't match (see
+            build_embedding_matrix()'s cache-invalidation check).
 
     Returns:
         An Indexes bundle ready for retrieval.py to query.
@@ -259,7 +415,7 @@ def build_indexes(catalog: list[dict] | None = None) -> Indexes:
 
     catalog = catalog if catalog is not None else load_catalog()
     fts_conn = build_fts5_index(catalog)
-    matrix, asins = build_embedding_matrix(catalog)
+    matrix, asins = build_embedding_matrix(catalog, cache_path=embedding_cache_path)
     facts = build_facts_dict(catalog)
     category_lists = build_category_lists(catalog, facts)
     return Indexes(
