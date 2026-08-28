@@ -22,9 +22,12 @@ pip install -r requirements.txt
 python3 agent.py   # smoke test: three fixture turns, printed responses
 ```
 
-Real data (`catalog.jsonl`, the embedding matrix) is never committed
-(`.gitignore` excludes `*.jsonl`/`*.npy`/`*.db`); see `make data` once
-that download script exists (§8.0).
+Real data (`catalog.jsonl`, `public_set.jsonl`, the embedding matrix) is
+never committed (`.gitignore` excludes `*.jsonl`/`*.npy`/`*.db`). It ships
+with the organizer-supplied kit (see [`kit/README.md`](kit/README.md)) —
+copy `catalog.jsonl`/`public_set.jsonl` into `data/`, then run `make data`
+(or `python3 scripts/check_data.py`) to verify a clean clone has what it
+needs (§8.0, §8.5 step E9).
 
 ## Architecture at a glance
 
