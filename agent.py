@@ -78,11 +78,18 @@ class Agent:
         baseline-incompatible argument.
 
         Args:
-            catalog_path: Path to catalog.jsonl. load_catalog() is a stub
-                and ignores this, returning utils.FIXTURE_CATALOG instead.
+            catalog_path: Path to catalog.jsonl. load_catalog() falls back
+                to utils.FIXTURE_CATALOG (3 rows) when this path is absent.
         """
         self.catalog_path = Path(catalog_path)
-        self.indexes: Indexes = build_indexes(load_catalog(str(self.catalog_path)))
+        catalog = load_catalog(str(self.catalog_path))
+        # Only reuse/populate the real embeddings.npy cache when we're
+        # actually running the real catalogue — otherwise a fixture-sized
+        # fallback (path absent) would silently overwrite a previously
+        # built real cache with a 3-row one on its next save (see
+        # indexes.build_indexes()'s embedding_cache_path docstring).
+        cache_path = "data/embeddings.npy" if self.catalog_path.exists() else None
+        self.indexes: Indexes = build_indexes(catalog, embedding_cache_path=cache_path)
         self.gazetteer: AttributeGazetteer = build_attribute_gazetteer(
             self.indexes.catalog
         )

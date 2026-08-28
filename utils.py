@@ -7,14 +7,16 @@ diverge") and §7.2 ("The single highest-risk shared object").
 Owner: Haojun (Indexes and retrieval). §8.1, step A1 — BLOCKING.
 This module has no internal dependencies; every other module may import it.
 
-Everything below is a stub. Function bodies return fixture values only —
-see the module docstring in each file for what "real" means here.
+product_text() and load_catalog() (A1) are real. The Candidate shape (C1)
+and fixture_score() are also real — see their own docstrings.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -103,22 +105,36 @@ FIXTURE_CATALOG: list[dict] = [
 ]
 
 
+# Detail keys pulled into product_text(), in the order the design doc lists
+# them (§3.2: "details[Department, Material, Color, Brand, Style]"). Not
+# every row's `details` dict has all five — missing keys are skipped, not
+# padded, since a blank field contributes nothing to either FTS5 tokens or
+# the embedding text.
+PRODUCT_TEXT_DETAIL_KEYS: list[str] = ["Department", "Material", "Color", "Brand", "Style"]
+
+
 def load_catalog(path: str = "data/catalog.jsonl") -> list[dict]:
     """Load the catalogue.
 
     Design doc §3.2 (offline stage input) and §8.0 ("Never commit large
     binaries to the repo directly; ship a `make data` download script").
 
-    STUB: ignores `path` and returns `FIXTURE_CATALOG` (3 rows) instead of
-    the real 50,000-row catalog.jsonl.
+    Falls back to FIXTURE_CATALOG (3 rows) when `path` does not exist, so
+    every module stays runnable without the real 50,000-row catalog.jsonl
+    on disk (§7.2's fixture-stub approach) — the real file is gitignored
+    and supplied by the organizer kit, not committed.
 
     Args:
-        path: Path to catalog.jsonl on disk.
+        path: Path to catalog.jsonl on disk, one JSON object per line.
 
     Returns:
         A list of raw product record dicts.
     """
-    return FIXTURE_CATALOG
+    p = Path(path)
+    if not p.exists():
+        return FIXTURE_CATALOG
+    with open(p, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 def product_text(row: dict) -> str:
@@ -129,9 +145,17 @@ def product_text(row: dict) -> str:
     Style]". Owner Haojun, §7.2/§8.1 step A1 (BLOCKING) — "All three indexes
     import it. No local copies exist anywhere in the repo."
 
-    STUB: does not concatenate the real fields; returns a fixture string
-    tagged with the row's `parent_asin` so downstream stubs stay traceable
-    per-product without implementing the real join/weighting logic.
+    Concatenates, in the order above, whichever of those fields are present
+    and non-empty: `title` (str); `features`/`description` (each a list of
+    strings, joined with spaces); `categories` (a list of strings, from
+    most to least general); `store` (str); then the five `details` keys in
+    PRODUCT_TEXT_DETAIL_KEYS order, skipping any missing from this row's
+    `details` dict (real rows carry 0-5 of the five — see FIXTURE_CATALOG's
+    third row for a `details: {}` example). Every part is joined with a
+    single space; no per-field markers, since product_text() feeds the
+    *embedding* text and the facts-dict substring blob, not the FTS5
+    columns (those are populated straight from the raw fields in
+    indexes.build_fts5_index(), so column weighting stays possible there).
 
     Args:
         row: A raw catalogue record (see FIXTURE_CATALOG for shape).
@@ -139,8 +163,24 @@ def product_text(row: dict) -> str:
     Returns:
         The product's text blob, one string per ASIN.
     """
-    asin = row.get("parent_asin", "UNKNOWN")
-    return f"[STUB product_text for {asin}]"
+    parts: list[str] = []
+    title = row.get("title")
+    if title:
+        parts.append(str(title))
+    for key in ("features", "description"):
+        values = row.get(key) or []
+        parts.extend(str(v) for v in values if v)
+    categories = row.get("categories") or []
+    parts.extend(str(c) for c in categories if c)
+    store = row.get("store")
+    if store:
+        parts.append(str(store))
+    details = row.get("details") or {}
+    for key in PRODUCT_TEXT_DETAIL_KEYS:
+        value = details.get(key)
+        if value:
+            parts.append(str(value))
+    return " ".join(parts)
 
 
 def fixture_score(seed: str) -> float:
