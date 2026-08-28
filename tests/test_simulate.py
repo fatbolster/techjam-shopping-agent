@@ -153,7 +153,7 @@ def test_answer_clarification_unknown_attribute_is_no_preference() -> None:
 # D6 — instrumented session driver
 # --------------------------------------------------------------------------
 def _agent():
-    from agent import Agent
+    from agents.our_agent import Agent
 
     return Agent("data/nonexistent-catalog.jsonl")  # falls back to FIXTURE_CATALOG
 

@@ -1,12 +1,209 @@
-"""Points the evaluator at this team's real Agent (agent.py, repo root).
+"""The Agent: wires every stub into a runnable reset()/respond() loop.
 
-The organizer kit's own baseline agent — an "editable weak baseline:
-stateless BM25 retrieval with no LLM dependency" (its own docstring) — is
-preserved at starter/baseline_agent.py for reference/comparison. evaluator/
-evaluator.py imports `from starter.agent import Agent`, so this module is
-the swap point: re-exporting the real Agent here means no evaluator code
-changes are needed to evaluate this team's actual pipeline instead of the
-reference baseline.
+Design doc §4 (System diagram, the full per-turn pipeline) and §7.2's
+interface-contract sketch. The exact `reset`/`respond` signatures below
+follow the supplied starter kit's baseline agent (§5.1: "The supplied
+starter agent conflates retrieval and ranking — it issues one FTS5 query
+with LIMIT top_k and returns that order directly"), which the evaluator
+drives directly, matched here exactly (no added/removed/reordered
+parameters):
+
+    Agent(catalog_path: str | Path = "data/catalog.jsonl") -> None
+    reset(session_id: str, user_profile: dict) -> None
+    respond(session_id: str, user_message: str, turn: int, top_k: int) -> dict
+
+Note two consequences of that contract: (1) the harness is the source of
+truth for `turn`, not an internal counter — Agent.respond() stores
+whatever it is given, it does not increment its own; and (2) a single
+Agent instance serves many concurrent sessions, so state is a
+session_id -> SessionState map, not one SessionState field.
+
+Owner: Marcus (Evaluation and integration). §8.5, step E1 (repo skeleton,
+BLOCKING), step E2 (BLOCKING — "Wire stubs into a runnable Agent ... End-to-
+end run with fixture data before any component is real."), step E8
+(integrate modules, keep main green).
+
+This module is the one place every other module is imported together. All
+of *those* modules are stubs; this module's job is only orchestration, so
+it is the closest thing here to "real" — the turn loop itself follows §3.4
+exactly, even though every step it calls returns fixture data.
 """
 
-from agent import Agent  # noqa: F401
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from clarify import pick_attribute
+from extract import AttributeGazetteer, build_attribute_gazetteer, update_slots
+from indexes import Indexes, build_indexes, embed_text
+from rank import DEFAULT_RANKER_PATH, FittedRanker, load_fitted_ranker, rank
+from retrieval import retrieve
+from state import (
+    SessionState,
+    init_state,
+    pick_track,
+    reconstruct_canonical,
+    set_pending_clarification,
+)
+from telemetry import log_turn
+from utils import load_catalog
+
+MAX_TURNS = 10  # §1.2: "Max 10 turns; exceeding scores zero."
+
+
+class Agent:
+    """A headless conversational shopping agent (§1, "The task").
+
+    Holds the offline indexes for the lifetime of the process (built once,
+    §3.2) and one SessionState per session_id, created by reset() and
+    mutated turn-by-turn by respond() — matching the kit's contract of one
+    Agent instance serving many sessions.
+    """
+
+    def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
+        """Build the offline indexes and attribute gazetteer once.
+
+        Design doc §3.2: "Runs once at startup, in roughly 5 seconds plus
+        encoding time." §8.5 step E1. Signature and default path match the
+        supplied kit's baseline agent exactly, so the evaluator can
+        construct this Agent the same way it constructs that one.
+
+        B2's gazetteer is derived from the exact ``Indexes.catalog`` rows,
+        keeping retrieval and extraction on one catalogue representation.
+
+        A fitted ranker (§3.4 Step 6, §8.3 step C5) is not threaded through
+        the constructor as a parameter, because the baseline contract has
+        no such parameter — instead, loaded internally here from
+        `models/ranker.json` (rank.DEFAULT_RANKER_PATH) when present, per
+        this docstring's own earlier note ("rank()'s should default to
+        loading it internally"). Falls back to `None` (HANDSET_WEIGHTS via
+        rank()'s own default) when no fitted ranker has been persisted yet
+        — a fresh clone before scripts/fit_ranker.py has run must still
+        work, just with the hand-set weights rather than a fitted model.
+
+        Args:
+            catalog_path: Path to catalog.jsonl. load_catalog() falls back
+                to utils.FIXTURE_CATALOG (3 rows) when this path is absent.
+        """
+        self.catalog_path = Path(catalog_path)
+        catalog = load_catalog(str(self.catalog_path))
+        # Only reuse/populate the real embeddings.npy cache when we're
+        # actually running the real catalogue — otherwise a fixture-sized
+        # fallback (path absent) would silently overwrite a previously
+        # built real cache with a 3-row one on its next save (see
+        # indexes.build_indexes()'s embedding_cache_path docstring).
+        cache_path = "data/embeddings.npy" if self.catalog_path.exists() else None
+        self.indexes: Indexes = build_indexes(catalog, embedding_cache_path=cache_path)
+        self.gazetteer: AttributeGazetteer = build_attribute_gazetteer(
+            self.indexes.catalog
+        )
+        self.ranker: Optional[FittedRanker] = None
+        try:
+            self.ranker = load_fitted_ranker(DEFAULT_RANKER_PATH)
+        except FileNotFoundError:
+            pass
+        self.sessions: dict[str, SessionState] = {}
+
+    def reset(self, session_id: str, user_profile: dict) -> None:
+        """Start a new session (§3.3: "Loaded once in reset()").
+
+        Args:
+            session_id: Identifier for the new session, joined against
+                ground truth offline (§3.4 Step 7) — never used at
+                inference time to look anything up.
+            user_profile: The session's raw profile dict (§2.4).
+                Filtered into `profile_terms` by state.derive_profile_terms();
+                the raw mapping is not retained in SessionState.
+
+        Returns:
+            None.
+        """
+        self.sessions[session_id] = init_state(session_id, user_profile)
+
+    def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
+        """Run one full turn of the pipeline (§3.4, §4).
+
+        Order: state update (§3.4 Step 1) -> canonical reconstruction
+        (Step 2) -> intent routing (Step 3) -> multi-stream retrieval
+        (Step 4) -> clarification decision (Step 5) -> ranking (Step 6) ->
+        telemetry (Step 7) -> return.
+
+        Args:
+            session_id: Must have been passed to reset() first.
+            user_message: The user's utterance for this turn.
+            turn: The 1-indexed turn number, supplied by the caller (§1.2's
+                10-turn cap is enforced by the harness, not here).
+            top_k: How many recommendations to return.
+
+        Raises:
+            RuntimeError: If reset() was not called for `session_id` first.
+
+        Returns:
+            {"message": str, "ask_attribute": str | None,
+             "recommendations": [{"parent_asin": str}, ...] (<= top_k),
+             "usage": dict} per §4's system diagram: "RETURN {message,
+            ask_attribute, recommendations[10], usage}", with
+            `recommendations` shaped as the kit's baseline agent shapes it.
+        """
+        if session_id not in self.sessions:
+            raise RuntimeError("reset must be called before respond")
+        state = self.sessions[session_id]
+        state.turn = turn
+
+        update_slots(state, user_message, self.gazetteer)
+        reconstruct_canonical(state, embed_text)
+        track = pick_track(state)
+        pool = retrieve(state, track, self.indexes)
+
+        ask_attribute = pick_attribute(pool, state, indexes=self.indexes)
+        if ask_attribute is not None:
+            state.asked_attributes.add(ask_attribute)
+            # Record what the *next* incoming turn is answering, so
+            # update_slots() can route it through extract.py's
+            # clarification-context path (requested_attribute) instead of
+            # the generic, context-blind parser. Without this the whole
+            # pending_clarification / consume_pending_clarification wiring
+            # extract.py already implements is unreachable dead code.
+            set_pending_clarification(state, ask_attribute)
+
+        ranked_asins = rank(pool, state, self.indexes, ranker=self.ranker, top_k=top_k)
+
+        log_turn(
+            session_id=state.session_id,
+            turn=state.turn,
+            candidates=pool,
+            state=state,
+            indexes=self.indexes,
+            ask_attribute=ask_attribute,
+        )
+
+        return {
+            "message": f"[STUB reply] turn={state.turn} track={track} pool_size={len(pool)}",
+            "ask_attribute": ask_attribute,
+            "recommendations": [{"parent_asin": asin} for asin in ranked_asins],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+
+if __name__ == "__main__":
+    # Smoke test: an end-to-end run over three turns, exercising a write,
+    # an overwrite, and a negation, per §8.6's "what the demo must show".
+    agent = Agent()
+    session_id = "demo-session"
+    agent.reset(
+        session_id,
+        user_profile={"preference_tags": ["comfort", "warmth"], "rating_style": "usually positive"},
+    )
+
+    for turn_number, turn_message in enumerate(
+        [
+            "I'm looking for a men's jacket",
+            "something for cooler weather, black",
+            "actually not black, blue",
+        ],
+        start=1,
+    ):
+        result = agent.respond(session_id, turn_message, turn=turn_number, top_k=10)
+        print(f"user: {turn_message}")
+        print(f"agent: {result}\n")

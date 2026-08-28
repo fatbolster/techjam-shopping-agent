@@ -9,12 +9,15 @@ This README is the assembled, per-owner summary (§7.1, §8.5.1: "each owner
 writes their own README section ... Marcus merges").
 
 **Status:** end to end and real on the full 50,000-row catalogue —
-`agent.py` runs against real data, not just fixtures, and every lane's
-own README section below is filled in with what's actually built. D1 is
-now resolved for real: the organizer's evaluator (`evaluator/evaluator.py`)
-and reference baseline agent (`starter/`) are in the repo, and
-`starter/agent.py` is swapped to score this team's real `Agent` — see
-"Official evaluator results" below. Remaining gaps: E6 (actually running
+`agents/our_agent.py` runs against real data, not just fixtures, and every
+lane's own README section below is filled in with what's actually built.
+D1 is now resolved for real: the organizer's evaluator
+(`evaluator/evaluator.py`) and reference baseline agent (`starter/`,
+`agents/baseline_agent.py`) are in the repo. `starter/agent.py` is a
+copy/paste slot — whatever's pasted there is what the evaluator scores;
+copy `agents/our_agent.py` in to evaluate this team's real pipeline, or
+`agents/baseline_agent.py` for the reference baseline — see "Official
+evaluator results" below. Remaining gaps: E6 (actually running
 all nine ablation configs against the real catalogue and populating the
 table — the code path is real and tested, not yet executed end to end);
 E7 (grid-search thresholds/quotas, not yet started). See each file's
@@ -41,7 +44,7 @@ per the evaluator's own formula.) Full per-session detail in
 `results/output.json`. These numbers are *with* the fitted ranker
 (`models/ranker.json`) wired in — an earlier run before that fix scored
 0.525/0.272/6.32/0.438 on the same four metrics, using unfitted
-`HANDSET_WEIGHTS` instead (see agent.py's commit history: `respond()`
+`HANDSET_WEIGHTS` instead (see agents/our_agent.py's commit history: `respond()`
 wasn't passing a ranker to `rank()` at all). `evaluate.py`'s own
 §6.1-formula scorer remains useful for fast local iteration (it doesn't
 need a full evaluator round-trip), but these are now the headline numbers.
@@ -52,7 +55,7 @@ need a full evaluator round-trip), but these are now the headline numbers.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python3 agent.py   # smoke test: three fixture turns, printed responses
+python3 -m agents.our_agent   # smoke test: three fixture turns, printed responses
 make evaluate   # full 200-session official score -> results/output.json
 ```
 
@@ -83,7 +86,7 @@ See §3-§4 of the design doc for the full rationale and system diagram.
 | `telemetry.py` | Append-only JSONL logging, training corpus | §3.4 Step 7, §6.6 |
 | `clarify.py` | Entropy x answerability clarification policy | §3.4 Step 5 |
 | `ablate.py` | Ablation harness, scenario slicing | §6.3-§6.4 |
-| `agent.py` | `Agent` — wires everything into `reset()`/`respond()` | §4 |
+| `agents/our_agent.py` | `Agent` — wires everything into `reset()`/`respond()` | §4 |
 
 ---
 
@@ -218,7 +221,8 @@ corpus.*
 module wiring, repository health (§8.5). Owns `main`.*
 
 - **What's built:** E1 (this repo skeleton, pinned requirements); E2
-  (`agent.py` wires every module into a runnable, now-real `Agent`); E3 —
+  (`agents/our_agent.py` wires every module into a runnable, now-real
+  `Agent`); E3 —
   `evaluate.py`, our own Hit Rate@10/MRR/MTTC/Efficiency scorer (§6.1's
   formulas verbatim) and `record_baseline()`, since the organizer
   evaluator itself isn't in the repo yet; E4 — `clarify.py`'s

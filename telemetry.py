@@ -425,13 +425,13 @@ def run_instrumented_corpus(
     6. Produce the per-stream recall report (D7).
     7. Export the intent_override / boundary transcripts (D8).
 
-    Imports `agent` / `simulate` lazily to avoid an import cycle
-    (`agent` imports `telemetry`).
+    Imports `agents.our_agent` / `simulate` lazily to avoid an import cycle
+    (`agents.our_agent` imports `telemetry`).
 
     Returns `{sessions, turns, feature_rows, recall, transcripts,
     transcripts_exported}`.
     """
-    from agent import Agent
+    from agents.our_agent import Agent
     from simulate import build_catalog_index, load_jsonl, run_session
 
     catalog = load_jsonl(catalog_path)

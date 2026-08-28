@@ -1,8 +1,8 @@
 """
-Tests for agent.py's Agent — specifically the fitted-ranker wiring found
-missing when the first real evaluator run scored noticeably lower than
-expected: Agent.respond() was calling rank() without a ranker, silently
-using HANDSET_WEIGHTS instead of the persisted fit from scripts/
+Tests for agents/our_agent.py's Agent — specifically the fitted-ranker
+wiring found missing when the first real evaluator run scored noticeably
+lower than expected: Agent.respond() was calling rank() without a ranker,
+silently using HANDSET_WEIGHTS instead of the persisted fit from scripts/
 fit_ranker.py (§8.3 step C5).
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agent import Agent
+from agents.our_agent import Agent
 from rank import HANDSET_WEIGHTS, FittedRanker, save_fitted_ranker
 
 

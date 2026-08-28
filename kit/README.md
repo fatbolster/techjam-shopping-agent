@@ -12,17 +12,28 @@ rest of this repo's docs link to.
   does not call into it; `simulate.py` remains useful for this team's own
   training-corpus generation (feeding C5's fit), just not for official
   scoring.
-- **`starter/agent.py`** — swapped to `from agent import Agent`, re-
-  exporting this team's real `Agent` (repo root `agent.py`) so the
-  evaluator scores our actual pipeline. The kit's own reference baseline
-  ("editable weak baseline: stateless BM25 retrieval with no LLM
-  dependency" — its own docstring) is preserved at
-  `starter/baseline_agent.py` for comparison.
+- **`starter/agent.py`** — the evaluator's actual import target
+  (`from starter.agent import Agent`), but treated as a **copy/paste
+  slot**, not a permanent home for any one agent's code: whatever's pasted
+  there at run time is what gets scored. The two real, version-controlled
+  agents live in `agents/`:
+  - `agents/our_agent.py` — this team's real pipeline (identical to what
+    used to be a root-level `agent.py`; every other module that needs the
+    real `Agent` — `telemetry.py`, tests — imports it from here now).
+  - `agents/baseline_agent.py` — the kit's own reference baseline
+    ("editable weak baseline: stateless BM25 retrieval with no LLM
+    dependency" — its own docstring), preserved for comparison.
 
-Run it: `python3 -m evaluator.evaluator --output output.json` from the
-repo root (needs `starter` importable as a package, hence running from
-root rather than `cd evaluator/`).
+  To evaluate this team's pipeline: `cp agents/our_agent.py
+  starter/agent.py` first, then run the evaluator. `results/our_model.json`
+  / `results/baseline.json` are examples of each, already committed.
 
-Resolved for D1: configuration A. Both `evaluator/` and `starter/` are
-committed (not gitignored like `data/`/`models/`) — small, essential to
-the repo being self-contained and re-scorable by anyone who clones it.
+Run it: `make evaluate` (or `python3 -m evaluator.evaluator --output
+results/output.json` directly) from the repo root — needs `starter`
+importable as a package, hence running from root rather than
+`cd evaluator/`.
+
+Resolved for D1: configuration A. `evaluator/`, `starter/`, and `agents/`
+are all committed (not gitignored like `data/`/`models/`) — small,
+essential to the repo being self-contained and re-scorable by anyone who
+clones it.
