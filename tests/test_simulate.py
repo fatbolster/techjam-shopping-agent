@@ -7,6 +7,7 @@ import pytest
 import simulate
 from extract import build_attribute_gazetteer, update_slots
 from state import init_state
+from telemetry import telemetry_path_ctx
 from utils import FIXTURE_CATALOG
 
 GAZ = build_attribute_gazetteer(FIXTURE_CATALOG)
@@ -158,36 +159,42 @@ def _agent():
 
 
 @pytest.mark.parametrize("scenario", ["buying", "browsing", "intent_override", "boundary"])
-def test_run_session_produces_a_transcript(scenario: str) -> None:
+def test_run_session_produces_a_transcript(scenario: str, tmp_path) -> None:
     session = {
         "sample_id": f"s-{scenario}",
         "scenario_type": scenario,
         "ground_truth": {"parent_asin": FIXTURE_ASINS[0]},
         "user_profile": {},
     }
-    result = simulate.run_session(_agent(), session, CATALOG_INDEX, max_turns=6)
+    # run_session() drives Agent.respond(), which calls log_turn() with no
+    # explicit path — without this redirect it silently appends to the
+    # real data/telemetry.jsonl (DEFAULT_TELEMETRY_PATH) on every test run.
+    with telemetry_path_ctx(str(tmp_path / "telemetry.jsonl")):
+        result = simulate.run_session(_agent(), session, CATALOG_INDEX, max_turns=6)
     assert 1 <= result["turns"] <= 6
     assert all(step["recommended"] for step in result["transcript"])
 
 
-def test_run_session_never_puts_the_target_asin_in_a_user_message() -> None:
+def test_run_session_never_puts_the_target_asin_in_a_user_message(tmp_path) -> None:
     session = {
         "sample_id": "leak-check",
         "scenario_type": "buying",
         "ground_truth": {"parent_asin": FIXTURE_ASINS[1]},
         "user_profile": {},
     }
-    result = simulate.run_session(_agent(), session, CATALOG_INDEX, max_turns=6)
+    with telemetry_path_ctx(str(tmp_path / "telemetry.jsonl")):
+        result = simulate.run_session(_agent(), session, CATALOG_INDEX, max_turns=6)
     assert all(FIXTURE_ASINS[1] not in step["user"] for step in result["transcript"])
 
 
-def test_run_session_intent_override_transcript_contains_a_contradiction() -> None:
+def test_run_session_intent_override_transcript_contains_a_contradiction(tmp_path) -> None:
     session = {
         "sample_id": "override-transcript",
         "scenario_type": "intent_override",
         "ground_truth": {"parent_asin": FIXTURE_ASINS[2]},
         "user_profile": {},
     }
-    result = simulate.run_session(_agent(), session, CATALOG_INDEX, max_turns=8)
+    with telemetry_path_ctx(str(tmp_path / "telemetry.jsonl")):
+        result = simulate.run_session(_agent(), session, CATALOG_INDEX, max_turns=8)
     users = [step["user"] for step in result["transcript"]]
     assert any(u.startswith("not ") and "instead" in u for u in users), users
