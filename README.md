@@ -9,12 +9,15 @@ This README is the assembled, per-owner summary (§7.1, §8.5.1: "each owner
 writes their own README section ... Marcus merges").
 
 **Status:** end to end and real on the full 50,000-row catalogue —
-`agent.py` runs against real data, not just fixtures. Remaining gaps:
-the organizer evaluator/participant kit itself (D1/E3 use our own scorer
-until it lands, see `kit/README.md`), the ablation harness (E5-E7), C8's
-coefficient report, and B10's transcript-sourced regression tests. See
-each file's module docstring for what it does and does not implement, and
-the per-owner sections below for specifics.
+`agent.py` runs against real data, not just fixtures, and every lane's
+own README section below is filled in with what's actually built.
+Remaining gaps: the organizer evaluator/participant kit itself (D1/E3 use
+our own §6.1-formula scorer until it lands — see `kit/README.md`); E6
+(actually running all nine ablation configs against the real catalogue and
+populating the table — the code path is real and tested, not yet
+executed end to end); E7 (grid-search thresholds/quotas, not yet started).
+See each file's module docstring for what it does and does not implement,
+and the per-owner sections below for specifics.
 
 ## Setup
 
@@ -97,14 +100,23 @@ canonical reconstruction, the buy/browse routing rule (§8.2). Owns the
   (default off), wired with a real try-then-fall-back-to-B3 path, though
   the LLM call itself is a stub (no LLM access provided, same constraint
   as C7).
+  B10 — `tests/test_extract_override_regressions.py` parses real
+  intent_override transcripts from `data/transcripts.txt` (D8's export)
+  and replays each session's full turn sequence through `update_slots()`,
+  asserting the negated value is gone and the new one landed: 31/32
+  sessions pass.
 - **What's stubbed:** the LLM half of B9 only, documented as such.
 - **How to verify:** `python3 -m pytest tests/test_extraction.py
   tests/test_negation.py tests/test_scenario.py tests/test_transitions.py
   tests/test_routing.py tests/test_canonical.py tests/test_gazetteer.py
-  tests/test_state.py`.
-- **Known limitations:** B10 (regression tests pulled from real D8
-  override transcripts) is not yet written — `data/transcripts.txt` now
-  has real intent_override/boundary transcripts to source them from.
+  tests/test_state.py tests/test_extract_override_regressions.py`.
+- **Known limitations:** one real B10 case (`public_0166`) is a marked
+  `xfail`, not a silent gap — the catalogue has exactly one row (out of
+  50,000) with `store == "NOT"`, and the gazetteer scanner matches that
+  brand against the literal word "not" that opens every override
+  construction, before negation parsing gets a chance to treat it as the
+  negation cue. Filed as [#46](https://github.com/fatbolster/techjam-shopping-agent/issues/46)
+  with a full repro and suggested fix direction.
 
 ## Emerson — Ranking
 
@@ -120,13 +132,17 @@ pairwise-objective comparison, the flagged LLM rerank (§8.3).*
   `models/ranker.json`.
 - **What's stubbed:** `llm_rerank()` (C7, closed as won't-do — no LLM
   access provided).
-- **Not yet done:** C8 (a notebook/script reporting fitted coefficients
-  and pairwise feature correlations) — waiting on a real corpus/fit
-  round-trip to report on. C6 (pairwise lambdarank comparison) closed as
-  won't-do — explicitly time-permitting/off critical path per its own
-  issue.
+  C8 — `scripts/report_ranker.py` reports fitted coefficients and
+  pairwise feature correlations, flags near-zero weights, and cross-checks
+  §2.4/§2.4.1's specific prediction that `rare_tag_match`/
+  `rating_style_fit` land small-but-nonzero (both did, on the real fit —
+  only `category_match` came out near-zero). C6 (pairwise lambdarank
+  comparison) closed as won't-do — explicitly time-permitting/off
+  critical path per its own issue.
 - **How to verify:** `python3 -m pytest tests/test_features.py
-  tests/test_rank.py`.
+  tests/test_rank.py tests/test_fit_ranker.py tests/test_report_ranker.py`;
+  `python3 scripts/fit_ranker.py && python3 scripts/report_ranker.py` for
+  a real fit + report against `data/features.jsonl`.
 - **Known limitations:** `price_fit()`'s real budget-fit formula (beyond
   null-safety) was never in scope (§2.2: 78.9% of prices are null; the
   non-null remainder isn't always numeric either — see clarify.py's
@@ -151,7 +167,8 @@ corpus.*
   the actual kit turns out to bundle its own simulator (config A).
 - **How to verify:** `python3 -m pytest tests/test_simulate.py
   tests/test_telemetry.py`; `python3 -m evaluate` for a real run —
-  writes `data/features.jsonl` (~29,000+ labelled rows over 200 sessions),
+  writes `data/features.jsonl` (~24,000 labelled rows over 200 sessions —
+  varies slightly run to run with conversation length),
   `data/telemetry.jsonl`, `data/transcripts.txt`, and prints the recall
   report.
 - **Known limitations:** pool recall is uneven by scenario — buying
@@ -171,12 +188,21 @@ module wiring, repository health (§8.5). Owns `main`.*
   evaluator itself isn't in the repo yet; E4 — `clarify.py`'s
   entropy x answerability policy against real per-candidate facts, not a
   fixture distribution; E9 — `scripts/check_data.py` / `make data`.
-- **Not yet done:** E5 (config-flagged ablation re-scoring), E6
-  (populating the nine-row ablation table), E7 (grid-search thresholds/
-  quotas) — `ablate.py`'s `ABLATION_CONFIGS`/`AblationResult` shape is in
-  place but `run_ablation()` itself is still a stub.
+  E5 — `ablate.py`'s `run_ablation()`: "feature"-kind configs re-rank
+  already-logged candidates (no re-retrieval); "stream"/"filter"-kind
+  configs run a full pass through the real pipeline with
+  `retrieval.STREAM_QUOTAS`/`DEPARTMENT_FILTER_ENABLED` toggled for the
+  duration, since `Agent.respond()`'s signature can't carry an ablation
+  flag through it.
+- **Not yet done:** E6 (`run_all_ablations()` exists and is tested, but
+  hasn't been run end to end against the real catalogue — each
+  stream/filter config is a several-minute full pass, so populating the
+  actual nine-row table is a follow-up execution step); E7 (grid-search
+  thresholds/quotas, not started).
 - **How to verify:** `python3 -m pytest` (full suite); `python3 -m
-  evaluate` for the real baseline score.
+  evaluate` for the real baseline score; `python3 -c "from ablate import
+  run_all_ablations; print(run_all_ablations())"` for the ablation table
+  (slow — nine full passes).
 - **Known limitations:** "headline figures come only from the supplied
   evaluator" (§8.4) still holds — `evaluate.py`'s numbers are this team's
   own computation against §6.1's formulas, not yet cross-checked against
