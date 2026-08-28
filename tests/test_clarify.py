@@ -139,6 +139,16 @@ def test_attribute_value_budget_none_when_price_missing():
     assert _attribute_value("budget", "X", facts) is None
 
 
+def test_attribute_value_budget_none_when_price_is_junk_string():
+    """Real catalogue data: price is 78.9% null, and among the rest not
+    always numeric — e.g. '—' or 'from 12.99' appear uncleaned (found by
+    running against the real 50,000-row catalogue). Must be excluded like
+    null, not raise TypeError from `//` on a str."""
+    for junk in ("—", "from 12.99", ""):
+        facts = {"X": {"price": junk}}
+        assert _attribute_value("budget", "X", facts) is None
+
+
 def test_attribute_value_feature_matches_controlled_phrase(indexes):
     assert _attribute_value("feature", "A", indexes.facts) == "water resistant"
 

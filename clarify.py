@@ -169,7 +169,15 @@ def _attribute_value(attribute: str, asin: str, facts: dict[str, dict]) -> Optio
         return row.get(attribute)
     if attribute == "budget":
         price = row.get("price")
-        if price is None:
+        # The real catalogue's price field is 78.9% null (§2.2) and, among
+        # the rest, not always numeric — junk values like "—" or a
+        # from-price string like "from 12.99" appear (never cleaned,
+        # matching price_fit()'s own scope: §2.2/features.py's price_fit()
+        # only implements the null-safety branch, not a real budget-fit
+        # formula, for the identical reason). Anything not already a plain
+        # number is treated the same as null: excluded from the
+        # distribution, not coerced or parsed.
+        if not isinstance(price, (int, float)):
             return None
         return str(int(price // _BUDGET_BUCKET_WIDTH))
     if attribute in ("feature", "use_case"):
