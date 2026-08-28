@@ -5,12 +5,15 @@ from copy import deepcopy
 import pytest
 
 from extract import (
+    USE_LLM_EXTRACTION,
     ExtractionResult,
+    SlotObservation,
     SlotOperation,
     apply_extraction_result,
     apply_slot_operation,
     apply_slot_operations,
     build_attribute_gazetteer,
+    extract_slots_llm,
     update_slots,
 )
 from state import (
@@ -232,3 +235,66 @@ def test_update_slots_consumes_clarification_and_uses_b3_result() -> None:
     assert state.pending_clarification is None
     assert state.asked_attributes == {"style"}
     assert state.scenario_buffer == "for a beach holiday"
+
+
+# --------------------------------------------------------------------------
+# B9: optional LLM extraction path — off by default, falls back to B3.
+# extract_slots_llm() is a deliberate stub (no LLM access provided, §1.2);
+# these tests protect the fallback wiring, not real LLM extraction.
+# --------------------------------------------------------------------------
+
+def test_use_llm_extraction_defaults_to_off():
+    assert USE_LLM_EXTRACTION is False
+
+
+def test_extract_slots_llm_stub_always_returns_none():
+    gazetteer = build_attribute_gazetteer(FIXTURE_CATALOG)
+    assert extract_slots_llm("I want a jacket", gazetteer) is None
+
+
+def test_update_slots_default_never_calls_llm_path(monkeypatch):
+    """use_llm_extraction defaults to USE_LLM_EXTRACTION (False) — the LLM
+    path must not even be attempted on an ordinary call."""
+    called = []
+    monkeypatch.setattr(
+        "extract.extract_slots_llm", lambda *a, **k: called.append(1) or None
+    )
+    state = init_state("b9-default-off")
+    gazetteer = build_attribute_gazetteer(FIXTURE_CATALOG)
+    update_slots(state, "I want a jacket", gazetteer)
+    assert called == []
+
+
+def test_update_slots_llm_flag_on_falls_back_to_b3_on_stub_none(monkeypatch):
+    """With the flag on, extract_slots_llm() is tried first; since the stub
+    always returns None, the B3 result must still land in state — the
+    fallback contract (§8.2 step B9's definition of done) holds even
+    though no real LLM call happens."""
+    calls = []
+    original = extract_slots_llm
+
+    def spy(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("extract.extract_slots_llm", spy)
+    state = init_state("b9-flag-on")
+    gazetteer = build_attribute_gazetteer(FIXTURE_CATALOG)
+    update_slots(state, "I want a red jacket", gazetteer, use_llm_extraction=True)
+    assert calls == [1]  # the LLM path was actually attempted
+    assert state.slots.get("color") == ("red",)  # and B3's fallback result landed
+
+
+def test_update_slots_llm_flag_on_uses_llm_result_when_available(monkeypatch):
+    """If extract_slots_llm() succeeds (non-None), update_slots() must use
+    that result directly rather than also running B3."""
+    llm_result = ExtractionResult(
+        slots={"color": "blue"},
+        residual_scenario=None,
+        observations=(SlotObservation("color", "blue", "gazetteer"),),
+    )
+    monkeypatch.setattr("extract.extract_slots_llm", lambda *a, **k: llm_result)
+    state = init_state("b9-llm-succeeds")
+    gazetteer = build_attribute_gazetteer(FIXTURE_CATALOG)
+    update_slots(state, "anything at all", gazetteer, use_llm_extraction=True)
+    assert state.slots.get("color") == ("blue",)  # from the LLM stub, not B3's parse of "anything at all"

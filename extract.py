@@ -13,6 +13,11 @@ step B9 (optional LLM path).
 B2's gazetteer builder, B3's deterministic single-utterance extraction,
 B4's structured state transitions, B5's conservative V1 negation planner,
 and B6's deterministic scenario-buffer transitions are implemented.
+B9 (extract_slots_llm(), behind USE_LLM_EXTRACTION) is a deliberate stub —
+no LLM access is provided in this environment (§1.2), same as rank.py's
+llm_rerank() (C7, closed as won't-do for the identical reason). It always
+reports "missing credentials" so update_slots()'s fallback path is real and
+tested even though the LLM call itself never runs.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Literal, TypeAlias
+from typing import Literal, Optional, TypeAlias
 
 from state import (
     ClarificationAttribute,
@@ -951,6 +956,48 @@ def _residual_scenario(message: str, findings: list[_Finding]) -> str | None:
     return None
 
 
+# B9: off by default (§8.6: "explicitly off the critical path"). When True,
+# update_slots() tries extract_slots_llm() first and falls back to B3's
+# extract_slots() on parse failure, timeout, or missing credentials —
+# never on by default, so the deterministic B3 path stays what every
+# other module is developed and tested against.
+USE_LLM_EXTRACTION = False
+
+
+def extract_slots_llm(
+    message: str,
+    gazetteer: AttributeGazetteer | None = None,
+    *,
+    requested_attribute: ClarificationAttribute | None = None,
+) -> Optional[ExtractionResult]:
+    """Constrained-JSON LLM extraction of the same flat attribute object
+    extract_slots() (B3) returns, for update_slots() to try first when
+    USE_LLM_EXTRACTION is on.
+
+    Design doc §8.2 step B9: "Falls back to B3 on parse failure, timeout, or
+    missing credentials." STUB: no LLM access is provided in this
+    environment (§1.2, same constraint documented on rank.py's C7
+    llm_rerank()) — this always returns None, reporting "missing
+    credentials" so update_slots()'s fallback-to-B3 path is real and
+    covered by tests even though no LLM call is ever actually made.
+
+    Args:
+        message: The raw user utterance for this turn.
+        gazetteer: The B2 attribute gazetteer (unused by the stub; a real
+            implementation would pass catalogue vocabulary into the
+            constrained-JSON schema/prompt).
+        requested_attribute: The clarification attribute this message may
+            be answering (unused by the stub).
+
+    Returns:
+        None always (stub) — signals "unavailable", i.e. fall back to B3.
+        A real implementation returns an ExtractionResult on a successful,
+        schema-valid parse, or None on parse failure/timeout/missing
+        credentials.
+    """
+    return None
+
+
 def extract_slots(
     message: str,
     gazetteer: AttributeGazetteer | None = None,
@@ -1775,16 +1822,25 @@ def update_slots(
     state: SessionState,
     message: str,
     gazetteer: AttributeGazetteer | None = None,
+    *,
+    use_llm_extraction: bool = USE_LLM_EXTRACTION,
 ) -> SessionState:
     """Merge one utterance's extracted attributes into the slot dictionary.
 
-    Consumes one pending clarification, performs B3 extraction, asks B5 to
-    plan structured operations from the pre-transition state, delegates slot
+    Consumes one pending clarification, performs B3 (or, when
+    `use_llm_extraction` is on, B9-then-B3) extraction, asks B5 to plan
+    structured operations from the pre-transition state, delegates slot
     mutation to B4, then applies B6's independent scenario transition.
 
     Args:
         state: The session state to update, mutated in place.
         message: The raw user utterance for this turn.
+        use_llm_extraction: When True, tries extract_slots_llm() (B9)
+            first and falls back to extract_slots() (B3) only if it
+            returns None (parse failure/timeout/missing credentials).
+            Defaults to USE_LLM_EXTRACTION (off) — B9 is off the critical
+            path and, in this environment, always falls back (no LLM
+            access provided; see extract_slots_llm()'s docstring).
 
     Returns:
         The same SessionState with explicit slots updated.
@@ -1796,11 +1852,17 @@ def update_slots(
 
     had_no_slots = not state.slots
     requested_attribute = consume_pending_clarification(state)
-    extraction = extract_slots(
-        message,
-        gazetteer,
-        requested_attribute=requested_attribute,
-    )
+    extraction = None
+    if use_llm_extraction:
+        extraction = extract_slots_llm(
+            message, gazetteer, requested_attribute=requested_attribute
+        )
+    if extraction is None:
+        extraction = extract_slots(
+            message,
+            gazetteer,
+            requested_attribute=requested_attribute,
+        )
     if had_no_slots:
         reference_values = _initial_override_reference_values(message, gazetteer)
         if reference_values is not None:
