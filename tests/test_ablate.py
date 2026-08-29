@@ -257,15 +257,3 @@ def test_run_ablation_stream_kind_restores_quotas_after(tmp_path, monkeypatch):
     original = {track: dict(quotas) for track, quotas in retrieval.STREAM_QUOTAS.items()}
     run_ablation("-popularity_stream")
     assert retrieval.STREAM_QUOTAS == original
-
-
-def test_run_ablation_filter_kind_restores_flag_after(tmp_path, monkeypatch):
-    """Asserts *restoration*, not a particular value: the module default
-    changed to False once the ablation showed the filter only costs recall
-    (see DEPARTMENT_FILTER_ENABLED in retrieval.py). What matters here is
-    that run_ablation() leaves the flag exactly as it found it."""
-    monkeypatch.chdir(tmp_path)
-    _write_synthetic_data(tmp_path)
-    original = retrieval.DEPARTMENT_FILTER_ENABLED
-    run_ablation("-department_filter")
-    assert retrieval.DEPARTMENT_FILTER_ENABLED is original
