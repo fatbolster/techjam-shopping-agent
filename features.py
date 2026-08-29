@@ -22,6 +22,8 @@ other way to reach it. See that field's docstring in state.py for why.
 
 from __future__ import annotations
 
+import re
+
 from indexes import Indexes
 from state import SessionState
 from utils import Candidate, fixture_score
@@ -183,8 +185,28 @@ def category_match(candidate: Candidate, facts: dict[str, dict], state: SessionS
     record = facts.get(candidate.asin)
     if record is None:
         return 0.0
-    cat3 = (record.get("cat3") or "").lower()
-    return 1.0 if category.strip().lower() in cat3 else 0.0
+    # Token-level match against the candidate's full category path, not a
+    # single-substring match against cat3. Measured on the real corpus,
+    # the substring form fired on 4 of 629 target rows (the stated
+    # category is a multi-word phrase like "women dresses" naming path
+    # levels deeper than cat3 ever holds), which is why the fitted weight
+    # came out near zero (scripts/report_ranker.py). Each token counts if
+    # it appears in the path directly or as its singular ("dresses" ->
+    # "dress"); score is the matched fraction, so a partially-right
+    # category ("women" matches, "dresses" doesn't) scores between the
+    # extremes instead of collapsing to 0.
+    path = record.get("cat_path")
+    if not path:
+        path = " ".join(
+            str(v) for v in (record.get("dept"), record.get("cat3")) if v
+        ).lower()
+    if not path:
+        return 0.0
+    tokens = [t for t in re.split(r"[^a-z0-9]+", category.strip().lower()) if len(t) >= 3]
+    if not tokens:
+        return 0.0
+    hits = sum(1 for t in tokens if t in path or t.rstrip("s") in path)
+    return hits / len(tokens)
 
 
 def brand_match(candidate: Candidate, facts: dict[str, dict], state: SessionState) -> float:

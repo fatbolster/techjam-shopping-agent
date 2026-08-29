@@ -353,6 +353,16 @@ def build_facts_dict(catalog: list[dict]) -> dict[str, dict]:
         facts[asin] = {
             "dept": categories[1] if len(categories) > 1 else None,
             "cat3": categories[2] if len(categories) > 2 else None,
+            # The full category path, lowercased, for token-level category
+            # matching. dept/cat3 alone stop at categories[2] ("Clothing",
+            # "Shoes") — but the category a shopper states ("women
+            # dresses") names the *deeper* levels, which previously
+            # existed nowhere in facts except buried inside `blob` where
+            # matching also hits descriptions (features.category_match()'s
+            # near-zero fitted weight was measured to come exactly from
+            # this gap: only 4 of 629 target rows matched their own
+            # stated category).
+            "cat_path": " ".join(str(c) for c in categories).lower(),
             "store": row.get("store"),
             "price": row.get("price"),
             "rating_number": rn,
