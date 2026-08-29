@@ -114,6 +114,30 @@ python3 -m evaluator.evaluator --output results/baseline.json
 
 Put `agents/our_agent.py` back into `starter/agent.py` afterwards.
 
+### Reproducing the headline score
+
+The fitted ranker is not committed (`models/` is gitignored, like all
+generated data), and the agent falls back to hand-set weights without
+it — so a clean clone must fit it before evaluating, or the score will
+come out well below the committed runs:
+
+```bash
+python3 -m evaluate            # instrumented corpus -> data/features.jsonl (~10 min)
+python3 scripts/fit_ranker.py  # fit -> models/ranker.json
+make evaluate                  # official evaluator -> results/output.json
+```
+
+Expected: technical score ~0.696 (the evaluator is deterministic; small
+variation comes only from the regenerated training corpus). Committed
+reference runs, newest first:
+
+| Run | Score | What it measures |
+|---|---|---|
+| `results/category_match_fix.json` | 0.696 | current code (token-level category matching) |
+| `results/retrained_ranker.json` | 0.684 | previous code, ranker refit on a matching corpus |
+| `results/our_model.json` | 0.641 | before the refit |
+| `results/baseline.json` | 0.107 | the kit's starter agent |
+
 To summarise every run in `results/`:
 
 ```bash
