@@ -346,8 +346,10 @@ than by restoring false slot values.
 ### Labels-free keyword retrieval experiment
 
 **Files:** `retrieval.py`, `telemetry.py`,
-`tests/test_clean_keyword_retrieval.py`, and
-`results/labels_free_keyword_retrieval.json` &nbsp;·&nbsp;
+`tests/test_clean_keyword_retrieval.py` &nbsp;·&nbsp;
+**Artifact:** `results/labels_free_keyword_retrieval.json`, no longer retained
+in the working tree; recoverable with
+`git checkout 6dba941 -- results/` &nbsp;·&nbsp;
 **Paired score:** 0.6981 → 0.7040 (**+0.0059**) &nbsp;·&nbsp;
 **Decision:** iterate; current candidate not retained
 

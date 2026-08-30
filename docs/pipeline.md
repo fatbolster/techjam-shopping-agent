@@ -29,7 +29,7 @@ consequences shape the whole design:
 1. **The harness owns `turn`.** We store what we are given; we never increment
    a counter of our own.
 2. **One `Agent` serves many sessions.** State is a `session_id -> SessionState`
-   map (`agents/our_agent.py:105`), not a single field.
+   map (`agents/our_agent.py:106`), not a single field.
 
 `respond()` must return:
 
@@ -61,7 +61,7 @@ recall — an extra stream carries no recall risk, a filter always does.
 ## 1. Offline: what exists before the first word
 
 `Agent.__init__` runs once per process, in roughly five seconds plus encoding
-time (`agents/our_agent.py:64-105`). It loads `data/catalog.jsonl` (50,000
+time (`agents/our_agent.py:64-106`). It loads `data/catalog.jsonl` (50,000
 products) and builds five things.
 
 ### The four indexes (`indexes.py:27-53`)
@@ -81,7 +81,7 @@ title 6.0 | categories 4.0 | features 2.5 | details 2.5 | store 1.5 | descriptio
 ```
 
 The embedding matrix and the facts blob instead consume `product_text()`
-(`utils.py:149-165`) — one flat string per product, no field markers, because
+(`utils.py:140-165`) — one flat string per product, no field markers, because
 an embedding has no notion of columns. Two representations of the same
 catalogue, each shaped for its consumer.
 
@@ -97,7 +97,7 @@ deliberately does **not** call `product_text()`: tokenising a flat blob would
 turn arbitrary description words into hard constraints (`extract.py:211-214`).
 Values are filtered for safety and promo noise before entering.
 
-### The fitted ranker (`agents/our_agent.py:98-103`)
+### The fitted ranker (`agents/our_agent.py:100-105`)
 
 Loaded from `models/ranker.json` if present; falls back to `HANDSET_WEIGHTS`
 if not. It is **not** a constructor parameter, because the frozen baseline
@@ -123,7 +123,7 @@ becomes a slot, and never enters the query string.
 
 ## 2. The per-turn pipeline
 
-`Agent.respond()` (`agents/our_agent.py:117-196`) executes seven steps in a
+`Agent.respond()` (`agents/our_agent.py:124-188`) executes seven steps in a
 fixed order. Nothing loops, nothing branches on turn number.
 
 ```
@@ -176,7 +176,7 @@ accumulates. The turn proceeds in five sub-stages:
    `consume_pending_clarification()` returns `"color"`, and extraction runs in
    *clarification context* — so a bare reply of "blue" is routed to the right
    slot instead of through the generic, context-blind parser
-   (`agents/our_agent.py:170-175`). Without this wiring the entire
+   (`agents/our_agent.py:163-168`). Without this wiring the entire
    `pending_clarification` mechanism would be dead code.
 
 2. **Extract findings.** `extract_slots()` (`extract.py:1115`) runs a
@@ -395,7 +395,7 @@ internally — can never be asked at all.
 
 ### Step 6 — Feature extraction and ranking
 
-**`rank(pool, state, indexes, ranker, top_k)`** — `rank.py:320`
+**`rank(pool, state, indexes, ranker, top_k)`** — `rank.py:369`
 
 Every candidate in the pool gets a ten-dimensional feature vector
 (`features.py:34`, extracted at `features.py:356`):
@@ -417,7 +417,7 @@ Features 1–2 carry retrieval signal forward; 3–4 are catalogue priors; 5–8
 constraint satisfaction against the slot dictionary; 9–10 are the only place
 the user profile touches the pipeline.
 
-Scoring is a plain weighted sum (`rank.py:122-128`):
+Scoring is a plain weighted sum (`rank.py:143-149`):
 
 ```python
 score = sum(weights[name] * value for name, value in features.items())
@@ -425,13 +425,13 @@ score = sum(weights[name] * value for name, value in features.items())
 
 `weights` comes from the fitted logistic regression (`models/ranker.json`) when
 present, else `HANDSET_WEIGHTS` (`rank.py:53`). The fitted model's scaler is
-folded into the weights and intercept at fit time (`rank.py:226`), so scoring
+folded into the weights and intercept at fit time (`rank.py:270-274`), so scoring
 at inference stays a single dot product with no scaler round-trip.
 
 Then: sort descending, truncate to `TOP_K_TRUNCATE = 30`, return the first
-`top_k = 10` (`rank.py:349-359`).
+`top_k = 10` (`rank.py:396-406`).
 
-**The LLM rerank does not exist.** `llm_rerank()` (`rank.py:294`) returns
+**The LLM rerank does not exist.** `llm_rerank()` (`rank.py:343`) returns
 `None` unconditionally and is documented as a deliberate won't-do — no model
 access. `use_llm_rerank` defaults to `False` and the `Agent` never passes it.
 Grepping the repo for `anthropic|openai|claude|gpt-` returns nothing. The
@@ -471,7 +471,7 @@ touches a label.
 }
 ```
 
-`message` is still a diagnostic stub (`agents/our_agent.py:189`). The evaluator
+`message` is still a diagnostic stub (`agents/our_agent.py:182`). The evaluator
 scores `recommendations` and `ask_attribute`; free text is not part of the
 technical score, so it was never worth building without an LLM. `usage` is
 honestly zero — we make no model calls.
@@ -543,7 +543,7 @@ data/telemetry.jsonl
 data/features.jsonl        # session_id, turn, n_hard_slots, asin, [10 features], label
   |
 python3 scripts/fit_ranker.py
-  |  rank.fit_logistic_regression()           rank.py:131
+  |  rank.fit_logistic_regression()           rank.py:152
   |    StandardScaler -> LogisticRegression
   |    GroupKFold by session_id (no session spans a fold boundary)
   |    fold the scaler into weights + intercept
@@ -555,7 +555,7 @@ make evaluate    # Agent.__init__ loads it -> results/output.json
 
 ### Negative sampling: per turn, not per session
 
-`build_training_rows()` (`telemetry.py:216`) loops over **turns**, drawing a
+`build_training_rows()` (`telemetry.py:189`) loops over **turns**, drawing a
 fresh 20 pool negatives inside each one. The current corpus:
 
 ```
@@ -593,7 +593,7 @@ negatives drawn for any other. No integer seed exists to report.
 
 ### Fit hyperparameters
 
-`rank.py:200` is the complete model specification:
+`rank.py:230` is the complete model specification:
 
 ```python
 LogisticRegression(class_weight="balanced", penalty="l2")
@@ -605,8 +605,8 @@ sklearn 1.4.2):
 
 | Parameter | Value | Chosen or inherited |
 |---|---|---|
-| folds | `min(5, n_distinct_sessions)` → **5** | explicit, `rank.py:207` |
-| grouping | `GroupKFold` on `session_id` | explicit, `rank.py:208` |
+| folds | `min(5, n_distinct_sessions)` → **5** | explicit, `rank.py:241` |
+| grouping | `GroupKFold` on `session_id` | explicit, `rank.py:242` |
 | `class_weight` | `"balanced"` | explicit (632 vs 22,380) |
 | `penalty` | `"l2"` | explicit |
 | `C` | **1.0** | sklearn default |
@@ -622,7 +622,7 @@ iterations** on the real corpus, with no `ConvergenceWarning`.
 
 **They are report-only, and nothing is selected on them.** The five fold models
 are fit, scored, and discarded; the model that ships is refit on *every* row
-(`rank.py:219`). Step 5 of the protocol validates the approach — it does not
+(`rank.py:266`). Step 5 of the protocol validates the approach — it does not
 choose which fold's model deploys, gate whether the fit is good enough to
 persist, or tune anything. The held-out figures are printed by
 `scripts/fit_ranker.py` and persisted onto `FittedRanker` for inspection; no
@@ -630,7 +630,7 @@ inference path reads them (`rank()` touches only `.weights`).
 
 The grouping does matter for the figures being honest: turns from one session
 share a query and are not independent, so a plain random split would leak and
-inflate them (`rank.py:161-163`).
+inflate them (`rank.py:185-187`).
 
 **Read AUC and AP, not accuracy.** All three are reported:
 
@@ -651,7 +651,7 @@ without touching the evaluator.
 
 `cv_accuracy` is retained for continuity with §6.6 and because it was already
 persisted, but `FittedRanker`'s docstring marks it do-not-quote
-(`rank.py:89-101`).
+(`rank.py:89-100`).
 
 This loop is why the reproduction order in the README is not optional — a clean
 clone that skips it evaluates with `HANDSET_WEIGHTS` and scores ~0.641 instead
@@ -659,12 +659,17 @@ of ~0.696.
 
 ### Measured progression
 
-| Change | Score |
+| Milestone | Score |
 |---|---|
 | kit baseline agent | 0.107 |
 | our agent, pre-refit | 0.641 |
 | ranker refit on a corpus matching the current agent | 0.684 |
-| `category_match` against the full category path | **0.696** |
+| `category_match` against the full category path | 0.696 |
+| extraction and state repair | 0.698 |
+| clarification answerability and question order (current) | **0.777** |
+
+Per-change detail, ablations and the reproducibility note live in
+[`changes.md`](changes.md); that file is the authority if these two disagree.
 
 ---
 
@@ -674,13 +679,13 @@ Being explicit about this is cheaper than a reviewer finding it.
 
 | Thing | Status | Where | Why |
 |---|---|---|---|
-| LLM rerank | stub returning `None` | `rank.py:294` | no model access; closed as won't-do |
+| LLM rerank | stub returning `None` | `rank.py:343` | no model access; closed as won't-do |
 | LLM slot extraction | flag off, always falls back | `extract.py:1078` | same |
 | Department/category filter | `False` | `retrieval.py:101` | measured: costs 0.025 score, helps nothing |
 | Labels-free FTS stream | `False` | `retrieval.py:107` | +4 recovered, -3 displaced; net negative |
 | Slot decay over time | **not implemented** | — | slots change only by explicit user action |
 | Runtime-adaptive memory | **not implemented** | — | profile is distilled once at `reset()`, read-only |
-| Agent free-text `message` | diagnostic stub | `agents/our_agent.py:189` | not scored, needs an LLM to be worth building |
+| Agent free-text `message` | diagnostic stub | `agents/our_agent.py:182` | not scored, needs an LLM to be worth building |
 
 The two "not implemented" rows are design positions, not omissions. Slot
 lifetime is event-driven — write, overwrite, delete — because a shopper's

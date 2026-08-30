@@ -25,6 +25,24 @@ entirely in memory with zero LLM calls.
 - Version-by-version changelog and ablations — [`docs/changes.md`](docs/changes.md)
 - Setup and reproduction — below
 
+## Contents
+
+- [Project Overview](#project-overview)
+- [Setup and Installation](#setup-and-installation)
+- [Steps to Reproduce Your Results](#steps-to-reproduce-your-results)
+  - [Reproducing the headline score](#reproducing-the-headline-score)
+- [Limitations and Future Improvements](#limitations-and-future-improvements)
+- [Team Member Contributions](#team-member-contributions)
+- [File Structure and Purpose](#file-structure-and-purpose)
+
+**Further reading**
+
+- [`docs/pipeline.md`](docs/pipeline.md) — end-to-end architecture: what
+  happens to a user message at each of the seven per-turn steps, the offline
+  training loop, and what is deliberately stubbed or disabled.
+- [`docs/changes.md`](docs/changes.md) — version-by-version changelog, per
+  scenario slice, ablation tables, and the reproducibility note.
+
 ## Setup and Installation
 
 Python 3.12. From the repo root:
