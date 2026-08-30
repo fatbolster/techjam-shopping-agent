@@ -171,7 +171,7 @@ is exactly the model least likely to survive that shift.
 Code attribution below is derived from the repository's commit history;
 non-code contributions are recorded as reported by the team.
 
-**Marcus** — `peanutbutter1212` *(team lead)*
+**Marcus** — `Peanut` *(team lead)*
 
 - Category matching against the full category path (`features.py`) and
   indexing work (`indexes.py`)
