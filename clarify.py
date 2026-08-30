@@ -1,4 +1,4 @@
-"""Clarification decision: entropy x answerability.
+"""Clarification decision: entropy x answerability with a safe fallback.
 
 Design doc §3.4 Step 5 (Clarification decision): "score(a) =
 P(answerable | a) x H(a), H(a) = -Sum_v p(v) log2 p(v). Ask about argmax if
@@ -47,9 +47,9 @@ from utils import Candidate
 # extract.py's _CLARIFICATION_SLOT_MAP, which only recognises
 # ClarificationAttribute keys and raises KeyError on anything else.
 # "department" has no entry: it is useful internally but, per state.py,
-# cannot be requested through this interface at all. "other" (the free-text
-# fallback channel) is also excluded — it is never the *best* question to
-# proactively ask, only a landing spot for an unclassifiable reply.
+# cannot be requested through this interface at all. "other" is scored
+# separately as a one-shot fallback only after no structured attribute clears
+# the threshold; it does not compete with structured questions on entropy.
 ANSWERABILITY_PRIOR: dict[str, float] = {
     "category": 0.9,
     "brand": 0.3,
@@ -88,6 +88,13 @@ ASK_THRESHOLD = 0.15
 # unable to learn anything. Set to the evaluator's own 10-turn ceiling so
 # the cap never binds before the session does.
 MAX_CLARIFICATIONS_PER_SESSION = 10
+
+# These attributes had no informative replies in the corrected-state
+# transcript. Keep their entropy signal available, but defer them whenever a
+# non-deferred structured attribute already clears the usefulness threshold.
+# This is deliberately a coarse grouping rather than a fitted public-set
+# probability, so candidate-pool entropy still decides within each group.
+DEFERRED_ATTRIBUTES: frozenset[str] = frozenset({"brand", "budget", "size"})
 
 # ANSWERABILITY_PRIOR's keys (ClarificationAttribute) and state.slots' keys
 # (SlotKey) are two different vocabularies (state.py) that mostly, but not
@@ -259,7 +266,11 @@ def pick_attribute(
     additionally ask when useful'."
 
     Respects `state.asked_attributes` (don't repeat a question) and
-    MAX_CLARIFICATIONS_PER_SESSION (protects MTTC, §3.4 Step 5).
+    MAX_CLARIFICATIONS_PER_SESSION (protects MTTC, §3.4 Step 5). Attributes
+    with effectively zero answerability are deferred while another structured
+    question clears the threshold. If no structured question clears it,
+    ``other`` is asked once as a broad fallback; its reply is still extracted
+    into real slots and never creates an ``other`` state field.
 
     Args:
         pool: The current candidate pool.
@@ -278,9 +289,20 @@ def pick_attribute(
         for attr in ANSWERABILITY_PRIOR
         if not _already_filled(attr, state) and attr not in state.asked_attributes
     ]
-    if not candidates:
-        return None
-
     scored = [(attr, score_attribute(attr, pool, state, indexes=indexes)) for attr in candidates]
-    best_attr, best_score = max(scored, key=lambda pair: pair[1])
-    return best_attr if best_score >= ASK_THRESHOLD else None
+    preferred = [
+        pair
+        for pair in scored
+        if pair[0] not in DEFERRED_ATTRIBUTES and pair[1] >= ASK_THRESHOLD
+    ]
+    if preferred:
+        return max(preferred, key=lambda pair: pair[1])[0]
+
+    if scored:
+        best_attr, best_score = max(scored, key=lambda pair: pair[1])
+        if best_score >= ASK_THRESHOLD:
+            return best_attr
+
+    if "other" not in state.asked_attributes:
+        return "other"
+    return None

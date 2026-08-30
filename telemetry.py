@@ -267,7 +267,7 @@ def per_stream_recall_report(
     latter only populated where `session_meta` supplies `scenario_type`).
     """
     session_meta = session_meta or {}
-    streams = ("keyword", "semantic", "popularity")
+    streams = ("keyword", "keyword_clean", "semantic", "popularity")
 
     def blank() -> dict:
         return {
@@ -329,7 +329,7 @@ def format_recall_report(report: dict) -> str:
     how often it carried the target and how often it was the *only* stream
     that did (its unique catches).
     """
-    streams = ("keyword", "semantic", "popularity")
+    streams = ("keyword", "keyword_clean", "semantic", "popularity")
     lines: list[str] = []
 
     def block(title: str, bucket: dict) -> None:

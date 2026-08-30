@@ -17,6 +17,7 @@ import pytest
 from clarify import (
     ANSWERABILITY_PRIOR,
     ASK_THRESHOLD,
+    DEFERRED_ATTRIBUTES,
     MAX_CLARIFICATIONS_PER_SESSION,
     _attribute_value,
     pick_attribute,
@@ -204,16 +205,15 @@ def test_score_attribute_ignores_candidates_with_unknown_value(state_empty):
 # pick_attribute() — argmax, threshold, already-asked/already-filled, cap
 # --------------------------------------------------------------------------
 
-def test_pick_attribute_none_indexes_returns_none(pool, state_empty):
-    """Every attribute scores 0.0 without indexes (below ASK_THRESHOLD),
-    so nothing clears the bar — matches score_attribute()'s None fallback."""
-    assert pick_attribute(pool, state_empty, indexes=None) is None
+def test_pick_attribute_none_indexes_uses_other_fallback(pool, state_empty):
+    """Without catalogue evidence, the one-shot broad fallback remains."""
+    assert pick_attribute(pool, state_empty, indexes=None) == "other"
 
 
 def test_pick_attribute_still_matches_bare_two_arg_interface_sketch(pool, state_empty):
     """§7.2's documented signature, pick_attribute(pool, state) -> str |
     None, must still work with indexes omitted entirely."""
-    assert pick_attribute(pool, state_empty) is None  # no indexes -> no signal -> None
+    assert pick_attribute(pool, state_empty) == "other"
 
 
 def test_pick_attribute_respects_already_filled_slots(indexes, pool):
@@ -237,29 +237,59 @@ def test_pick_attribute_respects_session_cap(indexes, pool):
     in clarify.py) doesn't require editing this test — the *behaviour*
     under test is the cap binding, not its particular value."""
     state = SessionState(session_id="s4")
-    n = min(MAX_CLARIFICATIONS_PER_SESSION, len(ANSWERABILITY_PRIOR))
-    state.asked_attributes = set(list(ANSWERABILITY_PRIOR)[:n])
+    state.asked_attributes = {*ANSWERABILITY_PRIOR, "other"}
+    assert len(state.asked_attributes) >= MAX_CLARIFICATIONS_PER_SESSION
     assert pick_attribute(pool, state, indexes=indexes) is None
 
 
 def test_pick_attribute_returns_none_once_every_attribute_has_been_asked(indexes, pool):
     """Independent of the numeric cap: pick_attribute() never repeats a
     question (it filters on `attr not in state.asked_attributes`), so once
-    all nine askable attributes are used up it must return None even if
-    MAX_CLARIFICATIONS_PER_SESSION is set above nine and never binds."""
+    all structured attributes and the fallback are used it returns None."""
     state = SessionState(session_id="s4b")
-    state.asked_attributes = set(ANSWERABILITY_PRIOR)
+    state.asked_attributes = {*ANSWERABILITY_PRIOR, "other"}
     assert pick_attribute(pool, state, indexes=indexes) is None
 
 
-def test_pick_attribute_returns_none_when_no_attribute_clears_threshold():
-    """A pool where every candidate shares every attribute value has zero
-    entropy everywhere — nothing should clear ASK_THRESHOLD."""
+def test_pick_attribute_uses_other_after_structured_attributes_are_exhausted(indexes, pool):
+    state = SessionState(session_id="structured-exhausted")
+    state.asked_attributes = set(ANSWERABILITY_PRIOR)
+    assert pick_attribute(pool, state, indexes=indexes) == "other"
+
+
+def test_pick_attribute_uses_other_once_when_no_attribute_clears_threshold():
+    """A zero-entropy pool uses the broad fallback once, then stops."""
     facts = {"A": _facts_row("Men", "Jackets", "Acme", "Red", 20.0)}
     idx = Indexes(catalog=[], fts_conn=None, embedding_matrix=None, embedding_asins=[], facts=facts, category_lists={})
     pool = [Candidate(asin="A"), Candidate(asin="A")]
     state = SessionState(session_id="s5")
+    assert pick_attribute(pool, state, indexes=idx) == "other"
+    state.asked_attributes.add("other")
     assert pick_attribute(pool, state, indexes=idx) is None
+
+
+def test_pick_attribute_defers_zero_answerability_attribute_for_viable_question():
+    """High brand entropy must not outrank an answerable color question."""
+    facts = {
+        key: _facts_row("Men", "Jackets", key, color, 20.0)
+        for key, color in zip(("A", "B", "C", "D"), ("Red", "Red", "Blue", "Blue"))
+    }
+    idx = Indexes(
+        catalog=[],
+        fts_conn=None,
+        embedding_matrix=None,
+        embedding_asins=[],
+        facts=facts,
+        category_lists={},
+    )
+    pool = [Candidate(asin=key) for key in facts]
+    state = SessionState(session_id="deferred-brand", slots={"category": "Jackets"})
+
+    assert "brand" in DEFERRED_ATTRIBUTES
+    assert score_attribute("brand", pool, state, indexes=idx) > score_attribute(
+        "color", pool, state, indexes=idx
+    )
+    assert pick_attribute(pool, state, indexes=idx) == "color"
 
 
 def test_pick_attribute_picks_the_argmax_scoring_attribute(indexes, pool):

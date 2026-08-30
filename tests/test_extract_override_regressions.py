@@ -119,20 +119,13 @@ def test_override_construction_found_in_most_intent_override_sessions():
         assert len(_CASES) >= 0.5 * len(_ALL_SESSIONS)
 
 
-# Known, found-not-fixed extraction gap (not this file's to fix — see the
-# xfail reason below): a real catalog row (B086RSP18R) has store == "NOT",
-# a data-entry error the store/brand gazetteer takes literally. The
-# generic gazetteer scanner then matches the bare word "not" that opens
-# every override construction ("not X, Y instead") as a brand mention,
-# before the negation-specific parsing gets a chance to treat it as the
-# negation cue instead — a collision this specific, on one catalogue row
-# out of 50,000, rather than a systemic negation-detection failure.
+# This transcript's replacement is a free-form compound color outside B3's
+# deliberately fixed color vocabulary. The unrelated brand=NOT collision is
+# fixed, but expanding color extraction is a separate change.
 _KNOWN_EXTRACTION_GAPS: dict[str, str] = {
     "public_0166": (
-        "catalog row B086RSP18R has store=='NOT'; the gazetteer scanner "
-        "matches the override construction's leading 'not' as that brand "
-        "before negation parsing runs, so brand ends up set to 'NOT' "
-        "instead of the intended color override landing"
+        "replacement color 'black/muddy girl camo' is outside the fixed "
+        "color vocabulary; free-form color expansion is out of scope"
     ),
 }
 

@@ -577,6 +577,107 @@ def _is_looking_for_category_context(tokens: list[str], start: int) -> bool:
     return tokens[max(0, start - 2) : start] == ["looking", "for"]
 
 
+_GENERIC_BRAND_CONTROL_WORDS: frozenset[str] = frozenset(
+    {"key", "not", "sole", "style"}
+)
+_BRAND_CONTEXT_WORDS: frozenset[str] = frozenset(
+    {
+        "actually",
+        "brand",
+        "by",
+        "choose",
+        "from",
+        "like",
+        "love",
+        "mind",
+        "prefer",
+        "preferred",
+        "want",
+        "wanted",
+        "wear",
+    }
+)
+
+
+def _brand_is_ambiguous_without_syntax(
+    normalized: str, gazetteer: AttributeGazetteer
+) -> bool:
+    """Whether a store label is also ordinary non-brand vocabulary."""
+    return (
+        normalized in _GENERIC_BRAND_CONTROL_WORDS
+        or normalized in _FEATURE_PHRASES
+        or normalized in _PRODUCT_NOUNS
+        or any(
+            normalized in gazetteer.get(slot, {})
+            for slot in ("department", "category", "color", "material", "style", "use_case")
+        )
+    )
+
+
+def _is_brand_context(
+    tokens: list[str],
+    start: int,
+    end: int,
+    normalized: str,
+    gazetteer: AttributeGazetteer,
+) -> bool:
+    """Require local brand-like evidence for a generic store-name match."""
+    previous = tokens[start - 1] if start else None
+    if previous in {"brand", "by", "from"}:
+        return True
+    if _brand_is_ambiguous_without_syntax(normalized, gazetteer):
+        return False
+    preference_prefix = tokens[max(0, start - 3) : start]
+    while preference_prefix and preference_prefix[-1] in {"a", "an", "the"}:
+        preference_prefix.pop()
+    if preference_prefix and preference_prefix[-1] in _BRAND_CONTEXT_WORDS:
+        return True
+    if tokens[end : end + 3] == ["would", "be", "better"]:
+        return True
+    if start == 0 and end == len(tokens):
+        return True
+    return any(token in _PRODUCT_NOUNS for token in tokens[end : end + 3])
+
+
+def _select_scalar_candidate(
+    slot: SlotKey,
+    candidates: list[tuple[int, int, str]],
+    tokens: list[str],
+) -> tuple[int, int, str]:
+    """Select one scalar using local intent cues before global label length."""
+    if slot in {"department", "category"}:
+        replacements = [
+            candidate
+            for candidate in candidates
+            if candidate[1] < len(tokens) and tokens[candidate[1]] == "instead"
+        ]
+        if replacements:
+            return max(replacements, key=lambda item: (item[0], item[1] - item[0]))
+
+    if slot == "category":
+        # The evaluator renders a broad path followed by its explicit leaf,
+        # e.g. "Jackets & Vests Vests". A repeated local leaf is stronger
+        # evidence than the globally longer taxonomy phrase.
+        repeated = [
+            candidate
+            for candidate in candidates
+            if candidate[0] >= candidate[1] - candidate[0]
+            and tokens[candidate[0] - (candidate[1] - candidate[0]) : candidate[0]]
+            == tokens[candidate[0] : candidate[1]]
+        ]
+        if repeated:
+            return max(repeated, key=lambda item: (item[0], item[1] - item[0]))
+
+    return max(
+        candidates,
+        key=lambda item: (
+            item[1] - item[0],
+            len(item[2]),
+            -item[0],
+        ),
+    )
+
+
 def _gazetteer_findings(
     message: str, gazetteer: AttributeGazetteer
 ) -> list[_Finding]:
@@ -595,6 +696,10 @@ def _gazetteer_findings(
         candidates: list[tuple[int, int, str]] = []
         for normalized, canonical in gazetteer.get(slot, {}).items():
             for start, end in _phrase_positions(tokens, normalized):
+                if slot == "brand" and not _is_brand_context(
+                    tokens, start, end, normalized, gazetteer
+                ):
+                    continue
                 if (
                     slot == "category"
                     and normalized in gazetteer.get("use_case", {})
@@ -603,23 +708,19 @@ def _gazetteer_findings(
                     and not (end < len(tokens) and tokens[end] in _PRODUCT_NOUNS)
                 ):
                     continue
+                if (
+                    slot == "style"
+                    and normalized in gazetteer.get("use_case", {})
+                    and _is_use_case_context(tokens, start, end)
+                    and not _is_looking_for_category_context(tokens, start)
+                ):
+                    continue
                 candidates.append((start, end, canonical))
 
         if not candidates:
             continue
         if slot in {"department", "category", "brand"}:
-            # One current value: prefer the longest phrase, then the more
-            # informative canonical label, then its first occurrence.
-            candidates = [
-                max(
-                    candidates,
-                    key=lambda item: (
-                        item[1] - item[0],
-                        len(item[2]),
-                        -item[0],
-                    ),
-                )
-            ]
+            candidates = [_select_scalar_candidate(slot, candidates, tokens)]
         else:
             candidates.sort(key=lambda item: (item[0], -(item[1] - item[0])))
             non_overlapping: list[tuple[int, int, str]] = []
@@ -757,6 +858,19 @@ def _classify_requirement(
             _Finding("use_case", value, "requirement_phrase", order + index)
             for index, value in enumerate(use_cases)
         ]
+
+    # A requirement payload is authoritative context. Exact catalogue
+    # values can still name a category or a legitimate brand, but generic
+    # feature/control vocabulary must not become a brand merely because a
+    # noisy store label exists in the catalogue.
+    category = lookup_gazetteer(gazetteer, "category", cleaned)
+    if category is not None:
+        return [_Finding("category", category, "requirement_phrase", order)]
+    brand = lookup_gazetteer(gazetteer, "brand", cleaned)
+    if brand is not None and not _brand_is_ambiguous_without_syntax(
+        normalized, gazetteer
+    ):
+        return [_Finding("brand", brand, "requirement_phrase", order)]
     return (
         [_Finding("feature", normalized, "requirement_phrase", order)]
         if normalized
@@ -1033,7 +1147,13 @@ def extract_slots(
         findings = []
         findings.extend(_budget_findings(message))
         findings.extend(_size_findings(message))
-        findings.extend(_gazetteer_findings(message, gazetteer))
+        requirement = _EXPLICIT_REQUIREMENT.search(message)
+        generic_scope = (
+            message
+            if requirement is None
+            else message[: requirement.start(1)]
+        )
+        findings.extend(_gazetteer_findings(generic_scope, gazetteer))
         findings.extend(_use_case_findings(message, gazetteer))
         findings.extend(_semantic_findings(message, gazetteer))
         # _residual_scenario() only reads `findings` (membership of each
@@ -1458,9 +1578,24 @@ def _initial_override_reference_values(
         return None
     extraction = extract_slots(preference, gazetteer)
     extracted = _extracted_slot_values(extraction)
-    return {
+    reference_values: OverrideReferenceValues = {
         slot: values
         for slot, values in extracted.items()
+        if slot not in ("department", "category")
+    }
+    if reference_values:
+        return reference_values
+
+    # Some evaluator old preferences are arbitrary catalogue feature text
+    # (for example "Pull On closure") that B3 correctly refuses to add as
+    # a generic live constraint. Keep only a provenance reference so an
+    # exact matching value learned later through a feature clarification can
+    # still be invalidated by the evaluator's explicit override scaffold.
+    fallback = _classify_requirement(preference, gazetteer, 0)
+    fallback_slots, _ = _build_result_slots(_deduplicate_findings(fallback))
+    return {
+        slot: value if isinstance(value, tuple) else (value,)
+        for slot, value in fallback_slots.items()
         if slot not in ("department", "category")
     }
 

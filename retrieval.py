@@ -20,9 +20,10 @@ what "relax the least-confident constraint" concretely does).
 from __future__ import annotations
 
 from collections import Counter
+import re
 
 from indexes import Indexes, keyword_search, knn_search
-from state import SessionState
+from state import CANONICAL_SLOT_ORDER, SessionState
 from utils import Candidate
 
 # Per-track quotas (§3.4 Step 4 table).
@@ -99,6 +100,74 @@ POOL_FLOOR = 50
 # §6.3's ablation table is evidence in the writeup and needs both arms.
 DEPARTMENT_FILTER_ENABLED = False
 
+# The labels-free source recovered four misses but also displaced three
+# existing top-10 targets over the 200-session paired run. Keep the measured
+# experiment available for iteration/ablation without making the unsuccessful
+# candidate the default retrieval behavior.
+CLEAN_KEYWORD_ENABLED = False
+
+# Evaluator/dialogue control phrases are not product evidence. The scenario
+# buffer is already constrained to current residual intent, but removing these
+# exact wrappers here prevents a retained wrapper from becoming an FTS term.
+_SCENARIO_BOILERPLATE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\ba key requirement is\b[:,;.!?\s]*", re.IGNORECASE),
+    re.compile(r"\bfor that,?\s+what matters is\b[:,;.!?\s]*", re.IGNORECASE),
+    re.compile(r"\bwhat i need is\b[:,;.!?\s]*", re.IGNORECASE),
+    re.compile(
+        r"\bi don['’]t have an additional preference for\s+"
+        r"(?:department|category|brand|style|color|material|features?|"
+        r"use[_ ]case|size|budget|price)\b[:,;.!?\s]*",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bthose options are not quite right(?: yet)?\b[:,;.!?\s]*", re.IGNORECASE),
+    re.compile(r"\bnot quite right(?: yet)?\b[:,;.!?\s]*", re.IGNORECASE),
+    re.compile(r"\b(?:but\s+)?i['’]?m still exploring\b[:,;.!?\s]*", re.IGNORECASE),
+    re.compile(r"\bstill exploring\b[:,;.!?\s]*", re.IGNORECASE),
+)
+
+
+def _clean_scenario_text(text: str) -> str:
+    """Remove dialogue wrappers while preserving residual intent words."""
+    cleaned = text
+    for pattern in _SCENARIO_BOILERPLATE_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip(" ,;:.!?\t\n")
+
+
+def _price_token(value: object) -> str:
+    """Render one current price value as a minimal FTS token."""
+    rendered = str(value).strip()
+    if not rendered:
+        return ""
+    return rendered if rendered.startswith("$") else f"${rendered}"
+
+
+def clean_keyword_query(state: SessionState) -> str:
+    """Project current explicit values and safe scenario text for FTS.
+
+    Unlike ``state.canonical_intent``, this ephemeral query deliberately
+    contains no serialized field labels. It reads no dialogue history,
+    profile metadata, override provenance, or raw utterance, so removed values
+    cannot leak back into retrieval.
+    """
+    parts: list[str] = []
+    for key in CANONICAL_SLOT_ORDER:
+        value = state.slots.get(key)
+        if isinstance(value, (list, tuple)):
+            parts.extend(str(item).strip() for item in value if str(item).strip())
+        elif value is not None and str(value).strip():
+            parts.append(str(value).strip())
+
+    for key in ("price_min", "price_max", "price_target"):
+        token = _price_token(state.slots.get(key, ""))
+        if token:
+            parts.append(token)
+
+    scenario = _clean_scenario_text(state.scenario_buffer)
+    if scenario:
+        parts.append(scenario)
+    return " ".join(parts)
+
 
 def _dept_of(asin: str, indexes: Indexes) -> str:
     """facts[asin]['dept'], or a stable placeholder when unknown/absent.
@@ -160,6 +229,37 @@ def keyword_stream(state: SessionState, indexes: Indexes, quota: int) -> list[Ca
         hits = filtered
 
     return [Candidate(asin=asin, bm25_raw=score, sources={"keyword"}) for asin, score in hits[:quota]]
+
+
+def clean_keyword_stream(
+    state: SessionState, indexes: Indexes, quota: int
+) -> list[Candidate]:
+    """Run the supplemental labels-free FTS query under the keyword quota.
+
+    This source adds candidates without replacing or truncating the canonical
+    keyword source. The optional buying-track filter mirrors
+    ``keyword_stream()`` so the existing ablation toggle remains coherent.
+    """
+    query = clean_keyword_query(state)
+    hits = keyword_search(indexes.fts_conn, query, quota * KEYWORD_OVERFETCH)
+
+    if state.track == "buy" and DEPARTMENT_FILTER_ENABLED:
+        department = state.slots.get("department")
+        category = state.slots.get("category")
+        filtered = []
+        for asin, score in hits:
+            facts = indexes.facts.get(asin, {})
+            if department and (facts.get("dept") or "").casefold() != str(department).casefold():
+                continue
+            if category and str(category).casefold() not in (facts.get("blob") or ""):
+                continue
+            filtered.append((asin, score))
+        hits = filtered
+
+    return [
+        Candidate(asin=asin, bm25_raw=score, sources={"keyword_clean"})
+        for asin, score in hits[:quota]
+    ]
 
 
 def semantic_stream(state: SessionState, indexes: Indexes, quota: int) -> list[Candidate]:
@@ -354,7 +454,7 @@ def floor_check(pool: list[Candidate], state: SessionState, indexes: Indexes) ->
 
 
 def retrieve(state: SessionState, track: str, indexes: Indexes) -> list[Candidate]:
-    """Run all three streams for this turn and return the unioned pool.
+    """Run the existing streams plus supplemental clean FTS and union them.
 
     Design doc §7.2 interface contract: `retrieve(state, track) ->
     [candidate]`. Owner Haojun, §8.1 step A2 (BLOCKING stub) through A8.
@@ -369,7 +469,12 @@ def retrieve(state: SessionState, track: str, indexes: Indexes) -> list[Candidat
     """
     quotas = STREAM_QUOTAS.get(track, STREAM_QUOTAS["browse"])
     keyword = keyword_stream(state, indexes, quotas["keyword"])
+    keyword_clean = (
+        clean_keyword_stream(state, indexes, quotas["keyword"])
+        if CLEAN_KEYWORD_ENABLED
+        else []
+    )
     semantic = semantic_stream(state, indexes, quotas["semantic"])
     popularity = popularity_stream(keyword + semantic, indexes, quotas["popularity"])
-    pool = union_dedupe([keyword, semantic, popularity])
+    pool = union_dedupe([keyword, semantic, popularity, keyword_clean])
     return floor_check(pool, state, indexes)
