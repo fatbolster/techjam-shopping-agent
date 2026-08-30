@@ -28,6 +28,11 @@ def load_feature_rows(path: str = "data/features.jsonl") -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def _fmt(value: float | None) -> str:
+    """Render an optional held-out metric, or "n/a" when no folds ran."""
+    return "n/a" if value is None else f"{value:.4f}"
+
+
 def main(feature_matrix_path: str = "data/features.jsonl", ranker_path: str = DEFAULT_RANKER_PATH) -> None:
     rows = load_feature_rows(feature_matrix_path)
     n_positive = sum(r["label"] for r in rows)
@@ -39,7 +44,17 @@ def main(feature_matrix_path: str = "data/features.jsonl", ranker_path: str = DE
     save_fitted_ranker(ranker, ranker_path)
 
     print(f"Fitted and saved to {ranker_path}.")
-    print(f"cv_accuracy (GroupKFold by session_id): {ranker.cv_accuracy}")
+
+    # GroupKFold-by-session_id held-out figures. Report-only: the shipped
+    # model is refit on every row, and nothing is selected on these.
+    positive_rate = n_positive / len(rows) if rows else 0.0
+    print("GroupKFold by session_id (held-out, report-only):")
+    print(f"  ROC-AUC           : {_fmt(ranker.cv_auc)}   (chance 0.5)")
+    print(f"  average precision : {_fmt(ranker.cv_ap)}   (chance {positive_rate:.4f})")
+    print(
+        f"  accuracy          : {_fmt(ranker.cv_accuracy)}   "
+        f"(majority-class baseline {1 - positive_rate:.4f} - do not quote this one)"
+    )
     print("weights:")
     for name, weight in sorted(ranker.weights.items(), key=lambda p: -abs(p[1])):
         print(f"  {name:20s} {weight:+.4f}")

@@ -23,6 +23,7 @@ corpus exists, only the input changes, not this code. Likewise llm_rerank()
 current "always None, always falls back" stub contract.
 """
 
+import json
 import math
 import random
 
@@ -364,6 +365,49 @@ def test_fit_logistic_regression_cv_accuracy_none_with_too_few_sessions():
     feature_matrix, labels, _ = _synthetic_rows(n_sessions=1)
     ranker = fit_logistic_regression(feature_matrix, labels, groups=["only-session"] * len(labels))
     assert ranker.cv_accuracy is None
+
+
+def test_fit_logistic_regression_reports_ranking_metrics():
+    """The same folds must also report AUC and average precision, the two
+    figures that survive this corpus's class imbalance (FittedRanker's
+    docstring). Both are computed on held-out sessions, so the synthetic
+    signal should put them well above their respective chance rates."""
+    feature_matrix, labels, groups = _synthetic_rows()
+    ranker = fit_logistic_regression(feature_matrix, labels, groups)
+    assert ranker.cv_auc is not None
+    assert 0.0 <= ranker.cv_auc <= 1.0
+    assert ranker.cv_auc > 0.5  # chance
+    assert ranker.cv_ap is not None
+    assert 0.0 <= ranker.cv_ap <= 1.0
+
+
+def test_fit_logistic_regression_ranking_metrics_none_with_too_few_sessions():
+    """No folds means no held-out ranking metrics either — but the fit
+    itself must still succeed, same contract as cv_accuracy."""
+    feature_matrix, labels, _ = _synthetic_rows(n_sessions=1)
+    ranker = fit_logistic_regression(feature_matrix, labels, groups=["only-session"] * len(labels))
+    assert ranker.cv_auc is None
+    assert ranker.cv_ap is None
+
+
+def test_load_fitted_ranker_accepts_legacy_json_without_ranking_metrics(tmp_path):
+    """A ranker.json persisted before cv_auc/cv_ap existed must still load,
+    so an existing models/ranker.json is not invalidated by the new fields
+    — the scoring path only ever reads `weights`."""
+    legacy = {
+        "weights": dict(HANDSET_WEIGHTS),
+        "intercept": -1.5,
+        "feature_means": {},
+        "feature_stds": {},
+        "cv_accuracy": 0.9,
+    }
+    path = tmp_path / "legacy_ranker.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    ranker = load_fitted_ranker(str(path))
+    assert ranker.weights == HANDSET_WEIGHTS
+    assert ranker.cv_accuracy == 0.9
+    assert ranker.cv_auc is None
+    assert ranker.cv_ap is None
 
 
 def test_fit_logistic_regression_rejects_mismatched_lengths():

@@ -17,9 +17,9 @@ run artifacts live in `results/`.
 | Our Model 6.0 | 0.825 | 0.518 | 4.20 | 0.680 | 0.7038 | +0.008 |
 | Our Model 7.0 *(state baseline)* | 0.810 | 0.536 | 4.38 | 0.662 | 0.6981 | -0.006 |
 | Model 7.1 retrieval candidate *(not retained)* | 0.815 | 0.536 | 4.22 | 0.679 | 0.7040 | +0.006 |
-| **Our Model 8.0** | **0.885** | **0.581** | **3.65** | **0.735** | **0.7639** | **+0.066** |
+| **Our Model 8.0** | **0.900** | **0.599** | **3.62** | **0.738** | **0.7774** | **+0.079** |
 
-Baseline → 8.0 is **+0.657** technical score, a 7.2× improvement.
+Baseline → 8.0 is **+0.671** technical score, a 7.3× improvement.
 
 Each change produces the next version, so the numbering is offset by one:
 Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
@@ -34,7 +34,7 @@ Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
 | Change 5 — Ranker refit on Change 4 corpus | Our Model 6.0 | 0.7038 |
 | Change 6 — Extraction and state repair | Our Model 7.0 *(state baseline)* | 0.6981 |
 | Change 6 retrieval experiment | Model 7.1 candidate *(not retained)* | 0.7040 |
-| Change 7 — Clarification answerability and question order | **Our Model 8.0** | **0.7639** |
+| Change 7 — Clarification answerability and question order | **Our Model 8.0** | **0.7774** |
 
 ### What each metric measures
 
@@ -48,15 +48,15 @@ Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
 
 | Slice | n | v1.0 | Chg 1 | Chg 2 | Chg 3 | Chg 4 | Chg 5 | Chg 6 | Chg 6 exp. | Chg 7 |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 200 | 0.580 | 0.750 | 0.790 | 0.820 | 0.825 | 0.825 | 0.810 | 0.815 | **0.885** |
-| Buying | 80 | 0.638 | 0.775 | 0.775 | 0.800 | 0.838 | 0.850 | 0.788 | 0.813 | **0.850** |
-| Browsing | 80 | 0.512 | 0.762 | 0.838 | 0.875 | 0.863 | 0.850 | 0.838 | 0.838 | **0.913** |
+| **Overall** | 200 | 0.580 | 0.750 | 0.790 | 0.820 | 0.825 | 0.825 | 0.810 | 0.815 | **0.900** |
+| Buying | 80 | 0.638 | 0.775 | 0.775 | 0.800 | 0.838 | 0.850 | 0.788 | 0.813 | **0.875** |
+| Browsing | 80 | 0.512 | 0.762 | 0.838 | 0.875 | 0.863 | 0.850 | 0.838 | 0.838 | **0.912** |
 | Intent override | 30 | 0.633 | 0.667 | 0.733 | 0.767 | 0.733 | 0.733 | 0.833 | 0.800 | **0.933** |
-| Boundary | 10 | 0.500 | n/r | 0.700 | 0.700 | 0.700 | 0.700 | 0.700 | 0.700 | **0.800** |
+| Boundary | 10 | 0.500 | n/r | 0.700 | 0.700 | 0.700 | 0.700 | 0.700 | 0.700 | **0.900** |
 
 > The boundary slice is n=10, so a single session moves it by 0.100. Its
-> Hit@10 was 0.700 (7 of 10) from Change 2 through Change 6; Change 7 moves
-> one additional session into the top 10. Treat movement in this small slice
+> Hit@10 was 0.700 (7 of 10) from Change 2 through Change 6; Model 8.0 moves
+> two additional sessions into the top 10. Treat movement in this small slice
 > cautiously. No `results/` artifact was
 > kept for the post-Change-1 run, so its boundary value is unrecoverable.
 
@@ -439,8 +439,9 @@ than retain a public-set threshold that has not demonstrated enough margin.
 ## Change 7 — Clarification answerability and question order
 
 **Files:** `clarify.py`, `tests/test_clarify.py`, and
-`results/clarification_answerability.json` &nbsp;·&nbsp;
+`results/most_updated_output.json` &nbsp;·&nbsp;
 **Paired score:** 0.6981 → 0.7639 (**+0.0658**) &nbsp;·&nbsp;
+**Headline (current ranker):** 0.7774 &nbsp;·&nbsp;
 **Decision:** retained
 
 The corrected-state baseline asked 635 questions, but only 114 produced a new
@@ -487,6 +488,12 @@ The official evaluator produced:
 | Efficiency | 0.6620 | **0.7350** | +0.0730 |
 | Technical Score | 0.698096 | **0.763931** | +0.065835 |
 
+The table above is the paired experiment as run: both arms share one fitted
+ranker, so the delta isolates the clarification policy. The headline figure in
+§Results (0.7774) is a later re-measurement of this same code against the
+currently fitted `models/ranker.json` — see the reproducibility note, since the
+two differ by more than refit noise.
+
 The paired result is 162 hit→hit, 15 miss→hit, 0 hit→miss, and 23
 miss→miss. Fifty-six retained hits arrive earlier, none arrive later, and no
 baseline hit is lost. The clean supplemental retrieval source remained
@@ -509,7 +516,29 @@ python3 scripts/fit_ranker.py  # fit -> models/ranker.json
 make evaluate                  # official evaluator -> results/output.json
 ```
 
-**The corpus regeneration is stochastic, so refitting the ranker can move the
-technical score by roughly ±0.008 even when source code is fixed.** Model 8.0's
-0.7639 headline uses the currently fitted `models/ranker.json`; use a median
-over 3–5 complete corpus-generation/refit runs when reporting refit variance.
+**The corpus regeneration is stochastic, so refitting the ranker moves the
+technical score even when source code is fixed.** Two complete refits of
+identical Change 7 source have now been measured:
+
+| Training corpus | Target in pool | Positives | Technical score |
+| :--- | ---: | ---: | ---: |
+| Pre-Change-7 draw (currently fitted) | 56.5% | 632 | **0.7774** |
+| Change 7 draw (matched to the code) | 43.1% | 559 | 0.7511 |
+
+That is a spread of **0.026**, far wider than the ±0.008 previously recorded
+here. The cause is the corpus, not the code: the simulator is stochastic, so
+different draws put the target in the candidate pool at materially different
+rates, and the ranker is fitted on ~200 effective samples (rows within a
+session are not independent). A 12% swing in positive count is enough to flip
+a coefficient sign — `category_match` moved from +1.60 to −0.41 between these
+two fits despite its raw correlation with the label staying positive in both.
+
+Model 8.0's 0.7774 headline uses the currently fitted `models/ranker.json`,
+which was fitted on the more favourable draw. **A clean clone reproducing from
+scratch should expect a number in the 0.75–0.78 range, not 0.7774 exactly.**
+Report a median over 3–5 complete corpus-generation/refit cycles if a single
+defensible figure is needed.
+
+The evaluator itself is deterministic: re-running it against a fixed
+`models/ranker.json` reproduces every metric and every scenario slice exactly.
+All observed variance enters through corpus generation and refitting.

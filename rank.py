@@ -89,6 +89,25 @@ class FittedRanker:
         cv_accuracy: Mean GroupKFold-by-session_id held-out accuracy from
             fitting (§6.6 step 5), or None when fit with hand-set weights
             (never fitted) or too few distinct sessions to form 2+ folds.
+
+            RETAINED FOR CONTINUITY, BUT DO NOT QUOTE IT. The training
+            corpus is ~2.7% positive (632 of 23,012 rows), so always
+            predicting "not the target" scores 0.973 while the fitted model
+            scores 0.924 — accuracy sits *below* the majority-class
+            baseline and reads as "worse than useless" for a model that
+            ranks well. Accuracy is the wrong family of metric here: this
+            is a ranking problem scored by where the target lands, not a
+            classification problem scored by how many rows got the right
+            side of 0.5. Use `cv_auc`/`cv_ap` below.
+        cv_auc: Mean held-out ROC-AUC over the same folds — the probability
+            that a randomly chosen target outranks a randomly chosen pool
+            negative. 0.5 is chance, and it is unaffected by class
+            imbalance, which is exactly why it belongs here.
+        cv_ap: Mean held-out average precision (PR-AUC) over the same
+            folds. Chance equals the positive rate (~0.0275), so this is
+            the honest "how much better than nothing" figure, and the one
+            most sensitive to the head of the ranking that Hit@10 actually
+            scores.
     """
 
     weights: dict[str, float] = field(default_factory=lambda: dict(HANDSET_WEIGHTS))
@@ -96,6 +115,8 @@ class FittedRanker:
     feature_means: dict[str, float] = field(default_factory=dict)
     feature_stds: dict[str, float] = field(default_factory=dict)
     cv_accuracy: Optional[float] = None
+    cv_auc: Optional[float] = None
+    cv_ap: Optional[float] = None
 
 
 def score_candidates(
@@ -158,9 +179,17 @@ def fit_logistic_regression(
     training data.
 
     A GroupKFold(session_id) validation pass also runs, purely to report
-    out-of-session accuracy — the returned model itself is refit on every
+    out-of-session performance — the returned model itself is refit on every
     row (§6.6 step 5 validates the *approach*, it does not select which
-    fold's model ships).
+    fold's model ships). Nothing downstream reads these numbers: they are
+    persisted and printed for inspection, and no weight, threshold, or
+    shipping decision is conditioned on them.
+
+    Three figures come back. `cv_accuracy` is retained for continuity with
+    §6.6 but is misleading on this corpus (see FittedRanker's docstring:
+    it lands below the majority-class baseline). `cv_auc` and `cv_ap` are
+    the ones to read — ranking metrics for what is, at inference, purely a
+    ranking task.
 
     Args:
         feature_matrix: One dict per training row, feature name (per
@@ -178,6 +207,7 @@ def fit_logistic_regression(
     """
     import numpy as np
     from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import average_precision_score, roc_auc_score
     from sklearn.model_selection import GroupKFold
     from sklearn.preprocessing import StandardScaler
 
@@ -205,16 +235,33 @@ def fit_logistic_regression(
     # distinct sessions to form at least 2 folds.
     n_unique_groups = len(set(groups))
     cv_accuracy: Optional[float] = None
+    cv_auc: Optional[float] = None
+    cv_ap: Optional[float] = None
     if n_unique_groups >= 2:
         n_splits = min(5, n_unique_groups)
-        fold_scores = []
+        fold_scores: list[float] = []
+        fold_aucs: list[float] = []
+        fold_aps: list[float] = []
         for train_idx, test_idx in GroupKFold(n_splits=n_splits).split(X_scaled, y, groups=groups_arr):
             if len(set(y[train_idx].tolist())) < 2:
                 continue  # a fold whose training split lost one class can't fit
             fold_model = _new_model().fit(X_scaled[train_idx], y[train_idx])
             fold_scores.append(fold_model.score(X_scaled[test_idx], y[test_idx]))
+            # Ranking metrics need both classes present in the held-out
+            # split to be defined at all (AUC is undefined with one class,
+            # and average precision degenerates). A single-class test fold
+            # is possible under GroupKFold when every session in it had its
+            # target miss the pool, so guard rather than assume.
+            if len(set(y[test_idx].tolist())) >= 2:
+                fold_probs = fold_model.predict_proba(X_scaled[test_idx])[:, 1]
+                fold_aucs.append(float(roc_auc_score(y[test_idx], fold_probs)))
+                fold_aps.append(float(average_precision_score(y[test_idx], fold_probs)))
         if fold_scores:
             cv_accuracy = sum(fold_scores) / len(fold_scores)
+        if fold_aucs:
+            cv_auc = sum(fold_aucs) / len(fold_aucs)
+        if fold_aps:
+            cv_ap = sum(fold_aps) / len(fold_aps)
 
     model = _new_model().fit(X_scaled, y)
 
@@ -231,6 +278,8 @@ def fit_logistic_regression(
         feature_means=dict(zip(FEATURE_NAMES, (float(m) for m in scaler.mean_))),
         feature_stds=dict(zip(FEATURE_NAMES, (float(s) for s in scaler.scale_))),
         cv_accuracy=cv_accuracy,
+        cv_auc=cv_auc,
+        cv_ap=cv_ap,
     )
 
 
