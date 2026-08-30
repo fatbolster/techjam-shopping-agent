@@ -2,70 +2,28 @@
 
 ## Project Overview
 
-<!-- TODO: fill in. -->
+A conversational shopping agent for discovery-led commerce, built for TechJam
+2026 Problem Statement 4.
 
-_[To be completed.]_
+On platforms where people discover products by scrolling rather than searching,
+shoppers arrive without the vocabulary for what they want — no brand, no
+category name, no model number, just a situation ("something for a beach
+trip"). Keyword search assumes the words already exist. This agent doesn't.
 
-## Architecture at a Glance
+It holds a multi-turn conversation over a frozen 50,000-product Amazon
+catalogue, returning ten ranked products per turn and asking a clarifying
+question when one would earn its keep. It handles shoppers revising themselves
+mid-session — "actually not black, blue" — by rebuilding its query from a slot
+dictionary rather than decaying an accumulated vector, so a retracted
+constraint is structurally absent rather than mathematically suppressed.
 
-A headless conversational shopping agent. It talks to a shopper across
-multiple turns and surfaces the product they actually want — ranked as
-high as possible, in as few turns as possible, within a hard limit of ten
-turns per session.
+Scores **0.7774** technical score on the 200 public sessions against the
+supplied baseline's 0.1067: Hit Rate@10 0.900, MRR 0.599, MTTC 3.62. Runs
+entirely in memory with zero LLM calls.
 
-**The problem.** Keyword search assumes the shopper already knows the
-words for what they want. Type "black running shoes" and it works. Type
-"something for a beach trip" and it collapses, because no product in the
-catalogue is labelled that way.
-
-**The approach.** Two representations of the conversation, kept in step:
-
-- A **slot dictionary** holds what the shopper literally said. It supports
-  write, overwrite, and delete — so when they say "actually not black,
-  blue", black is genuinely gone.
-- A **canonical intent string** is rebuilt from that dictionary every turn
-  and re-embedded. Because the dictionary no longer holds the superseded
-  value, the rebuilt query cannot contain it either.
-
-Three retrieval streams — keyword (BM25/FTS5), semantic (MiniLM
-embeddings), and popularity — run independently and are unioned into one
-candidate pool, so a miss requires all three to fail at once. A ten-feature
-logistic regression then ranks that pool, and the agent asks a clarifying
-question whenever one would earn its keep.
-
-Runs fully in memory over a 50,000-product catalogue, with no external
-vector database and no LLM calls required.
-
-The full per-turn architecture, from a user utterance through to the ranked
-recommendations, is documented in [`docs/pipeline.md`](docs/pipeline.md).
-
-### The per-turn pipeline
-
-One pass per turn: extract slots from the message, rebuild and re-embed the
-canonical intent, route buy/browse, retrieve from three streams, decide
-whether to ask a clarifying question, rank, log. See
-[`docs/pipeline.md`](docs/pipeline.md) for the full rationale and a step-by-step
-trace of one turn.
-
-| Module | Owns | Design doc |
-|---|---|---|
-| `agents/our_agent.py` | `Agent` — wires everything into `reset()`/`respond()` | §4 |
-| `agents/baseline_agent.py` | The kit's reference baseline, kept for comparison | §5.1 |
-| `utils.py` | `product_text()`, the shared `Candidate` shape | §3.2, §7.2 |
-| `indexes.py` | FTS5, embedding matrix, facts dict, category lists | §3.2 |
-| `retrieval.py` | Three streams, union, floor check | §3.4 Step 4 |
-| `extract.py` | Slot extraction, negation, merge policy | §3.4 Step 1 |
-| `state.py` | Slot dict, scenario buffer, canonical render, routing | §3.3, §3.4 Steps 2-3 |
-| `features.py` | The ten ranking features | §3.4 Step 6 |
-| `rank.py` | Scoring, logistic regression fit, LLM rerank | §3.4 Step 6, §6.6 |
-| `clarify.py` | Entropy x answerability clarification policy | §3.4 Step 5 |
-| `telemetry.py` | Append-only JSONL logging, training corpus | §3.4 Step 7, §6.6 |
-| `simulate.py` | User simulator, for our own corpus generation | §6.5.2 |
-| `evaluate.py` | Our own Hit@10/MRR/MTTC scorer, for fast local iteration | §6.1 |
-| `ablate.py` | Ablation harness, scenario slicing | §6.3-§6.4 |
-| `scripts/check_data.py` | Verifies `data/` has what a clean clone needs | §8.0 |
-| `scripts/fit_ranker.py` | Fits the ranker on the logged feature matrix | §6.6 |
-| `scripts/report_ranker.py` | Fitted weights, correlations, near-zero flags | §6.3, §2.4 |
+- Architecture and design rationale — [`docs/pipeline.md`](docs/pipeline.md)
+- Version-by-version changelog and ablations — [`docs/changes.md`](docs/changes.md)
+- Setup and reproduction — below
 
 ## Setup and Installation
 
@@ -213,22 +171,66 @@ is exactly the model least likely to survive that shift.
 Code attribution below is derived from the repository's commit history;
 non-code contributions are recorded as reported by the team.
 
-| Member | GitHub | Contribution |
-|---|---|---|
-| **Marcus** | `peanutbutter1212` | Category matching against the full category path (`features.py`), indexing work (`indexes.py`), and ranker retraining on a corpus matched to the current agent — the two changes that moved the score from 0.641 to 0.696. Authored the reproduction steps and reference-run table. Produced the project video. |
-| **Emerson** | `fatbolster` | Devised the original concept and overall solution design, and authored the written project description. Ranking stage (`rank.py`, `features.py`): the ten ranking features, hand-set and fitted scoring, logistic-regression fit with GroupKFold validation and held-out ranking metrics. Clarification policy (`clarify.py`) and its entropy x answerability scoring. Agent orchestration (`agents/our_agent.py`), retrieval tuning, the ablation harness (`ablate.py`), and the majority of the test suite. Wrote the README for the GitHub repository, along with the rest of the project documentation. |
-| **Qikun** | `qikunye` | Helped refine the initial concept, scoping it so that it was practical to complete within the TechJam timeline. Slot extraction and session state (`extract.py`, `state.py`): the slot dictionary with write/overwrite/delete semantics, negation and intent-override handling, canonical intent reconstruction, and the scenario buffer. Later clarification-answerability and retrieval optimisation across `clarify.py`, `retrieval.py` and `telemetry.py`. |
-| **Chellappan** | `chellu19` | User simulator and evaluation instrumentation (`simulate.py`, `telemetry.py`): per-scenario simulation policies, the instrumented corpus run that produces the ranker's training matrix, append-only telemetry logging, and per-stream recall reporting. |
-| **Haojun** | `haojun-mah` |  |
+**Marcus** — `peanutbutter1212` *(team lead)*
 
-## Appendix
+- Category matching against the full category path (`features.py`) and
+  indexing work (`indexes.py`)
+- Ranker retraining on a corpus matched to the current agent — the two changes
+  that moved the technical score from 0.641 to 0.696
+- Reproduction steps and the reference-run table
+- Produced the project video
 
-For detailed results — every change, its measured effect, per-scenario
-breakdowns, ablation tables and the full reproducibility note — see
-[`docs/changes.md`](docs/changes.md).
+**Emerson** — `fatbolster`
 
-Further reference:
+- Devised the original concept and overall solution design
+- Authored the written project description
+- Ranking stage (`rank.py`, `features.py`): the ten ranking features, hand-set
+  and fitted scoring, and the logistic-regression fit with GroupKFold
+  validation and held-out ranking metrics
+- Clarification policy (`clarify.py`) and its entropy x answerability scoring
+- Agent orchestration (`agents/our_agent.py`) and retrieval tuning
+- Ablation harness (`ablate.py`) and the majority of the test suite
+- Wrote the README for the GitHub repository and the rest of the project
+  documentation
 
-- [`docs/pipeline.md`](docs/pipeline.md) — end-to-end architecture, from a
-  user utterance to the ranked recommendations, including the offline
-  training loop and an explicit list of what is stubbed or disabled.
+**Qikun** — `qikunye`
+
+- Helped refine the initial concept, scoping it so that it was practical to
+  complete within the TechJam timeline
+- Slot extraction and session state (`extract.py`, `state.py`): the slot
+  dictionary with write/overwrite/delete semantics, negation and
+  intent-override handling, canonical intent reconstruction, and the scenario
+  buffer
+- Clarification-answerability and retrieval optimisation across `clarify.py`,
+  `retrieval.py` and `telemetry.py`
+
+**Chellappan** — `chellu19`
+
+- User simulator (`simulate.py`) with per-scenario simulation policies
+- The instrumented corpus run that produces the ranker's training matrix
+- Append-only telemetry logging and per-stream recall reporting
+  (`telemetry.py`)
+
+**Haojun** — `haojun-mah`
+
+## File Structure and Purpose
+
+| File | Purpose |
+|---|---|
+| `agents/our_agent.py` | `Agent` — wires everything into `reset()`/`respond()` |
+| `agents/baseline_agent.py` | The kit's reference baseline, kept for comparison |
+| `utils.py` | `product_text()`, the shared `Candidate` shape |
+| `indexes.py` | FTS5, embedding matrix, facts dict, category lists |
+| `retrieval.py` | Three streams, union, floor check |
+| `extract.py` | Slot extraction, negation, merge policy |
+| `state.py` | Slot dict, scenario buffer, canonical render, routing |
+| `features.py` | The ten ranking features |
+| `rank.py` | Scoring, logistic regression fit, LLM rerank |
+| `clarify.py` | Entropy x answerability clarification policy |
+| `telemetry.py` | Append-only JSONL logging, training corpus |
+| `simulate.py` | User simulator, for our own corpus generation |
+| `evaluate.py` | Our own Hit@10/MRR/MTTC scorer, for fast local iteration |
+| `ablate.py` | Ablation harness, scenario slicing |
+| `scripts/check_data.py` | Verifies `data/` has what a clean clone needs |
+| `scripts/fit_ranker.py` | Fits the ranker on the logged feature matrix |
+| `scripts/report_ranker.py` | Fitted weights, correlations, near-zero flags |
