@@ -82,7 +82,7 @@ POOL_FLOOR = 50
 # 0.667 -> 0.733, while buying is *identical* (0.775) either way — the
 # filter earns nothing even on the one track it exists to serve.
 #
-# MECHANISM (docs/DESIGN_AUDIT.md D-2/V-7, N-1). The filter compares the
+# MECHANISM (internal design audit D-2/V-7, N-1). The filter compares the
 # user's stated department against a candidate's `categories[1]`. That
 # field is 100% populated but only ~80% meaningful: 203 distinct values,
 # with store/product-type buckets like "Boot Shop" and "Novelty & More"

@@ -1,4 +1,12 @@
-# Techjam Shopping Agent (Team fatbolster) 
+# Techjam Shopping Agent (Team fatbolster)
+
+## Project Overview
+
+<!-- TODO: fill in. -->
+
+_[To be completed.]_
+
+## Architecture at a Glance
 
 A headless conversational shopping agent. It talks to a shopper across
 multiple turns and surfaces the product they actually want — ranked as
@@ -28,17 +36,16 @@ question whenever one would earn its keep.
 Runs fully in memory over a 50,000-product catalogue, with no external
 vector database and no LLM calls required.
 
-Full design rationale and data measurements live in
-[`docs/Shopping-Copilot-Technical-Design.pdf`](docs/Shopping-Copilot-Technical-Design.pdf).
-An audit of the implementation against that document and against the
-supplied evaluator is in [`docs/DESIGN_AUDIT.md`](docs/DESIGN_AUDIT.md).
+The full per-turn architecture, from a user utterance through to the ranked
+recommendations, is documented in [`docs/pipeline.md`](docs/pipeline.md).
 
-## Architecture at a glance
+### The per-turn pipeline
 
 One pass per turn: extract slots from the message, rebuild and re-embed the
 canonical intent, route buy/browse, retrieve from three streams, decide
-whether to ask a clarifying question, rank, log. See §3-§4 of the design
-doc for the full rationale and system diagram.
+whether to ask a clarifying question, rank, log. See
+[`docs/pipeline.md`](docs/pipeline.md) for the full rationale and a step-by-step
+trace of one turn.
 
 | Module | Owns | Design doc |
 |---|---|---|
@@ -60,7 +67,7 @@ doc for the full rationale and system diagram.
 | `scripts/fit_ranker.py` | Fits the ranker on the logged feature matrix | §6.6 |
 | `scripts/report_ranker.py` | Fitted weights, correlations, near-zero flags | §6.3, §2.4 |
 
-## Requirements and setup
+## Setup and Installation
 
 Python 3.12. From the repo root:
 
@@ -85,7 +92,7 @@ python3 -m agents.our_agent   # three fixture turns, printed responses
 make test                     # or: python3 -m pytest
 ```
 
-## Running the evaluation
+## Steps to Reproduce Your Results
 
 Run from the repo root (the folder containing `evaluator/`, `starter/`,
 `data/`) — the evaluator imports `starter` as a package.
@@ -156,3 +163,72 @@ for f in sorted(glob.glob('results/*.json')):
         print('   %-16s hit %.3f mrr %.3f'%(k,v['hit_rate_at_10'],v['mrr']))
 "
 ```
+
+## Limitations and Future Improvements
+
+**Limitation 1 — No model of long-term user behaviour.**
+The supplied dataset is organised at the *session* level: each of the 200
+sessions belongs to a distinct user, and no user ever appears twice. There is
+no second session for any shopper, so there is no purchase history, no
+repeat-visit signal, and nothing to learn about how an individual's taste
+persists or drifts over time. The agent therefore treats every conversation as
+a cold start. What personalisation exists is confined to the static
+`user_profile` supplied at `reset()`, distilled once into three preference tags
+and a rating-style value and then held read-only for the session.
+
+**Improvement 1 — A persistent per-user profile store.**
+Given data in which users recur, we would carry state across sessions: a
+profile updated at session close with learned brand and price affinities,
+category recency, and a per-user prior folded into the ranker as additional
+features. Cold-start behaviour would then degrade gracefully into the current
+design rather than being the only mode available. We deliberately did not
+simulate this on the supplied data — fabricating multi-session histories would
+have produced a model validated only against our own invention, which fails
+invisibly on transfer to real users.
+
+**Limitation 2 — A small, stochastically generated training corpus.**
+No labelled ranking data ships with the task, so the training corpus is
+produced by replaying all 200 sessions through our own user simulator. That
+simulator is stochastic, so each regeneration yields a different corpus: across
+two runs of identical source code, the target appeared in the candidate pool on
+56.5% of turns in one corpus and 43.1% in the other, and the resulting models
+scored 0.7774 and 0.7511. The fit is also thin — eleven parameters against
+roughly 200 effective samples, since turns within a session are not
+independent — which is enough for a feature coefficient to change sign between
+refits. A clean reproduction should therefore expect a score in the 0.75-0.78
+range rather than an exact figure.
+
+**Improvement 2 — Report a distribution, and regularise toward stability.**
+With more time we would quote a median over three to five complete
+corpus-generation and refit cycles instead of a single run, so the headline
+figure carries a measured variance rather than an implied precision. We would
+also trade a little peak score for transferability: stronger regularisation,
+or a smaller set of less correlated features, so that coefficient signs are
+stable across corpus draws. The private evaluation set is drawn from different
+users and different products, and a model whose weights move under resampling
+is exactly the model least likely to survive that shift.
+
+## Team Member Contributions
+
+Code attribution below is derived from the repository's commit history;
+non-code contributions are recorded as reported by the team.
+
+| Member | GitHub | Contribution |
+|---|---|---|
+| **Marcus** | `peanutbutter1212` | Category matching against the full category path (`features.py`), indexing work (`indexes.py`), and ranker retraining on a corpus matched to the current agent — the two changes that moved the score from 0.641 to 0.696. Authored the reproduction steps and reference-run table. Produced the project video. |
+| **Emerson** | `fatbolster` | Devised the original concept and overall solution design, and authored the written project description. Ranking stage (`rank.py`, `features.py`): the ten ranking features, hand-set and fitted scoring, logistic-regression fit with GroupKFold validation and held-out ranking metrics. Clarification policy (`clarify.py`) and its entropy x answerability scoring. Agent orchestration (`agents/our_agent.py`), retrieval tuning, the ablation harness (`ablate.py`), and the majority of the test suite. Wrote the README for the GitHub repository, along with the rest of the project documentation. |
+| **Qikun** | `qikunye` | Helped refine the initial concept, scoping it so that it was practical to complete within the TechJam timeline. Slot extraction and session state (`extract.py`, `state.py`): the slot dictionary with write/overwrite/delete semantics, negation and intent-override handling, canonical intent reconstruction, and the scenario buffer. Later clarification-answerability and retrieval optimisation across `clarify.py`, `retrieval.py` and `telemetry.py`. |
+| **Chellappan** | `chellu19` | User simulator and evaluation instrumentation (`simulate.py`, `telemetry.py`): per-scenario simulation policies, the instrumented corpus run that produces the ranker's training matrix, append-only telemetry logging, and per-stream recall reporting. |
+| **Haojun** | `haojun-mah` |  |
+
+## Appendix
+
+For detailed results — every change, its measured effect, per-scenario
+breakdowns, ablation tables and the full reproducibility note — see
+[`docs/changes.md`](docs/changes.md).
+
+Further reference:
+
+- [`docs/pipeline.md`](docs/pipeline.md) — end-to-end architecture, from a
+  user utterance to the ranked recommendations, including the offline
+  training loop and an explicit list of what is stubbed or disabled.

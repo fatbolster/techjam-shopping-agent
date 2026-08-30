@@ -67,7 +67,7 @@ assert set(ANSWERABILITY_PRIOR) <= set(CLARIFICATION_ATTRIBUTES)
 # "Ask about argmax if the score clears a threshold.").
 #
 # Lowered from 1.0 after measuring the supplied evaluator's actual
-# behaviour (docs/DESIGN_AUDIT.md, DC-3): when `ask_attribute` is None,
+# behaviour (internal design audit, DC-3): when `ask_attribute` is None,
 # evaluator.py's customer_reply() returns a content-free string ("Ask me
 # about one specific attribute.") and discloses nothing. Asking is
 # therefore not a cost to be justified — it is the only channel through

@@ -2,10 +2,11 @@
 
 How one shopper utterance becomes ten ranked ASINs.
 
-This document traces the actual code path, not the design intent. Where the
-implementation diverges from `docs/Shopping-Copilot-Technical-Design.pdf`, the
-divergence is stated. Every claim below is anchored to a `file:line` you can
-open.
+This document traces the actual code path, not the design intent. Section
+markers such as §3.4 in the source refer to the team's internal technical
+design document, which is not distributed with this repository; where the
+implementation diverges from it, the divergence is stated here. Every claim
+below is anchored to a `file:line` you can open.
 
 ---
 
@@ -732,5 +733,5 @@ one property the override guarantee rests on.
 | `scripts/fit_ranker.py` | fits the ranker on the logged feature matrix | offline |
 | `scripts/report_ranker.py` | fitted weights, correlations, near-zero flags | offline |
 
-See also: `README.md` for setup and reproduction, `docs/DESIGN_AUDIT.md` for
-the implementation-vs-design audit, `docs/changes.md` for the run log.
+See also: [`README.md`](../README.md) for setup and reproduction, and
+[`changes.md`](changes.md) for the full run log and per-change measurements.
