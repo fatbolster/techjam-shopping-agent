@@ -120,10 +120,10 @@ the reproducibility note in [`docs/changes.md`](docs/changes.md) for why.
 
 | Run | Score | What it measures |
 |---|---|---|
-| `results/output.json` | 0.754 | Model 9.0, current code and currently fitted ranker |
+| `results/output.json` | 0.760 | Model 10.0, current code and currently fitted ranker |
 | `results/baseline.json` | 0.107 | the kit's starter agent |
 
-Earlier reference runs (Models 5.0-8.0) are recorded in `docs/changes.md` and
+Earlier reference runs (Models 5.0-9.0) are recorded in `docs/changes.md` and
 recoverable from git history with `git checkout <rev> -- results/`.
 
 To summarise every run in `results/`:

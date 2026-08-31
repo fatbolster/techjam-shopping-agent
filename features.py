@@ -96,16 +96,27 @@ def pop(candidate: Candidate, facts: dict[str, dict]) -> float:
     present (indexes.build_facts_dict() already computes this for real),
     falling back to a fixture pseudo-score otherwise.
 
+    Clamped to 1.0 at the top. `build_facts_dict()` computes the ratio
+    without a bound, so the 5 catalogue products with more than 100,000
+    ratings score above 1.0 (max 1.1222) — outside this function's own
+    documented range, and against the intent of a normalised prior. Those
+    five sit on the largest weight in the fitted model, so the overflow
+    bought them a bonus no other product could reach: it is what kept
+    "Amazon Essentials Women's Cotton Bikini Brief Underwear" (142,454
+    ratings, pop 1.0307) inside the top 10 for a stated department of Men
+    even after department_match penalised it, on a query with no other
+    signal to rank by. Only 0.01% of the catalogue is affected.
+
     Args:
         candidate: The candidate to score.
         facts: Per-ASIN structured facts (indexes.Indexes.facts).
 
     Returns:
-        A float, intended range [0, 1].
+        A float in [0, 1].
     """
     record = facts.get(candidate.asin)
     if record is not None and "pop" in record:
-        return record["pop"]
+        return min(record["pop"], 1.0)
     return fixture_score("pop:" + candidate.asin)
 
 

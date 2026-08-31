@@ -580,6 +580,23 @@ def test_category_match_does_not_exclude_on_mismatch(facts):
     assert not math.isnan(got)
 
 
+def test_pop_is_clamped_to_one(facts):
+    """pop is a normalised prior; the 5 products over 100k ratings must not
+    exceed it. build_facts_dict() computes the ratio unbounded, and pop
+    carries the largest fitted weight, so an overflow is a bonus no other
+    product can reach."""
+    facts = dict(facts)
+    facts["B_MEGA"] = {"pop": 1.1222, "blob": ""}
+    got = pop(Candidate(asin="B_MEGA"), facts)
+    assert got == pytest.approx(1.0)
+
+
+def test_pop_leaves_normal_values_untouched(facts):
+    facts = dict(facts)
+    facts["B_NORMAL"] = {"pop": 0.4242, "blob": ""}
+    assert pop(Candidate(asin="B_NORMAL"), facts) == pytest.approx(0.4242)
+
+
 def test_category_match_mens_does_not_match_womens_path(facts):
     """A stated "mens" category must not score on a women's category path.
 

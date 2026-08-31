@@ -18,15 +18,17 @@ run artifacts live in `results/`.
 | Our Model 7.0 *(state baseline)* | 0.810 | 0.536 | 4.38 | 0.662 | 0.6981 | -0.006 |
 | Model 7.1 retrieval candidate *(not retained)* | 0.815 | 0.536 | 4.22 | 0.679 | 0.7040 | +0.006 |
 | Our Model 8.0 | 0.900 | 0.599 | 3.62 | 0.738 | 0.7774 | +0.079 |
-| **Our Model 9.0** | **0.880** | **0.560** | **3.70** | **0.731** | **0.7542** | **-0.023** |
+| Our Model 9.0 | 0.880 | 0.560 | 3.70 | 0.731 | 0.7542 | -0.023 |
+| **Our Model 10.0** | **0.885** | **0.568** | **3.67** | **0.734** | **0.7595** | **+0.005** |
 
-Baseline → 9.0 is **+0.648** technical score, a 7.1× improvement.
+Baseline → 10.0 is **+0.653** technical score, a 7.1× improvement.
 
-Model 9.0's headline is **lower than 8.0's, deliberately**. 8.0's 0.7774 came
-from an unusually favourable corpus draw; refitting the *same* 8.0 source at a
-pinned seed scores 0.7599, and 9.0 costs 0.0057 against that matched baseline
-in exchange for fixing the gender bug (Changes 8 and 9 below). The two figures
-are not comparable as a regression: the honest matched pair is 0.7599 → 0.7542.
+Models 9.0 and 10.0 read as *lower* than 8.0's 0.7774, which is a corpus-draw
+artefact rather than a regression. 8.0's headline came from an unusually
+favourable draw; refitting the **same 8.0 source** at a pinned seed scores
+0.7599. Against that matched baseline the gender work (Changes 8-10) costs
+**0.0004** — a rounding error — while removing the bug entirely. The honest
+matched comparison is 0.7599 → 0.7595, not 0.7774 → 0.7595.
 
 Each change produces the next version, so the numbering is offset by one:
 Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
@@ -43,7 +45,8 @@ Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
 | Change 6 retrieval experiment | Model 7.1 candidate *(not retained)* | 0.7040 |
 | Change 7 — Clarification answerability and question order | Our Model 8.0 | 0.7774 |
 | Change 8 — Word-boundary text matching | *(folded into 9.0)* | 0.7552 |
-| Change 9 — `department_match`, the eleventh feature | **Our Model 9.0** | **0.7542** |
+| Change 9 — `department_match`, the eleventh feature | Our Model 9.0 | 0.7542 |
+| Change 10 — Clamp `pop` to its documented range | **Our Model 10.0** | **0.7595** |
 
 ### What each metric measures
 
@@ -692,6 +695,76 @@ word boundaries provably cannot reach: a unisex listing filed under *Women*
 scores `slot_coverage` 1.0 *and* `department_match` 0.0 on a stated "Men".
 The feature-count assertion is pinned at 11 so a future change to the vector
 must be deliberate. Full suite: 578 passed.
+
+---
+
+## Change 10 — Clamp `pop` to its documented range
+
+**Files:** `features.py` (`pop`), `tests/test_features.py` &nbsp;·&nbsp;
+**Paired score:** 0.7535 → 0.7595 (**+0.0060**) &nbsp;·&nbsp;
+**Decision:** retained
+
+**What changed**
+
+`pop()` now returns `min(record["pop"], 1.0)`.
+
+**Why it was wrong**
+
+`build_facts_dict()` computes `pop = log1p(rating_number)/log1p(100000)` with
+no upper bound, so any product with more than 100,000 ratings scores above
+1.0 — up to 1.1222. `pop()`'s own docstring already said "intended range
+[0, 1]", and §3.4's feature table describes a normalised prior, so this was
+an overflow against documented intent rather than a design choice.
+
+Only **5 of 50,000 products (0.01%)** are affected, but `pop` carries the
+largest weight in the fitted model (+8.17), so the overflow handed those five
+a bonus of up to 1.0 raw score point that no other product in the catalogue
+could reach, regardless of how well it matched the query.
+
+Found while verifying Change 9. It is what kept *Amazon Essentials Women's
+Cotton Bikini Brief Underwear* (142,454 ratings, `pop` 1.0307) inside the top
+10 for a stated `department: Men` even after `department_match` penalised it:
+the overflow was worth 0.2507 raw points and the gap to escape the top 10 was
+only 0.1608.
+
+**Result**
+
+Paired, `PYTHONHASHSEED=0`, full corpus → refit → evaluate on both arms.
+Every metric improves:
+
+| Metric | Before | After |
+| :--- | ---: | ---: |
+| Hit Rate@10 | 0.8800 | **0.8850** |
+| MRR | 0.5578 | **0.5675** |
+| MTTC | 3.695 | **3.665** |
+| Held-out average precision | 0.7132 | **0.7227** |
+| **Technical score** | 0.7535 | **0.7595** |
+
+This recovers essentially the whole cost of Change 9: against the matched
+Change 8 baseline of 0.7599, the three gender changes together now come to
+**-0.0004**.
+
+The last purely-popularity-driven wrong-gender case is closed. On a bare
+`department: Men` query with no other signal, the bikini brief no longer
+appears at all. The wrong-gender results that remain are all genuinely unisex
+listings ("winter gloves for men women", "sunglasses for women men") filed
+under *Women*, where the text really does name both departments.
+
+**Residual, documented rather than fixed.** The behaviour is asymmetric:
+
+| Stated slot | Same department | Opposite department |
+| :--- | ---: | ---: |
+| `Women` | 60 / 60 | **0 / 60** |
+| `Men` | 43 / 60 | 6 / 60 |
+
+Six scenarios × top 10. A women's query returns no men's products at all; a
+men's query still admits a few. The cause is catalogue skew — 26,406 Women
+against 9,901 Men, 2.7× — so popular women's products keep surfacing against
+a Men slot, while a Women slot never needs to reach outside its own
+department.
+
+**Tests** — two new tests pinning the clamp and confirming ordinary values
+pass through untouched. Full suite: 580 passed.
 
 ---
 
