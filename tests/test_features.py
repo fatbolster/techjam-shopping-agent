@@ -258,6 +258,53 @@ def test_slot_coverage_no_terms_present_scores_zero(facts):
     assert got == pytest.approx(0.0)
 
 
+def test_slot_coverage_men_does_not_match_womens(facts):
+    """The gender slot must not be satisfied by the "men" inside "women's".
+
+    A plain `term in blob` substring test conflated the two: on the real
+    50,000-row catalogue 91.4% of blobs contain the substring "men" but
+    only 29.7% contain the word, so 30,850 products scored full credit on
+    the one feature meant to carry gender — women's products included.
+    """
+    facts = dict(facts)
+    facts["B_WOMENS"] = {
+        "dept": "Women",
+        "blob": "prettygarden women's summer wrap maxi dress, floral v neck",
+    }
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    got = slot_coverage(Candidate(asin="B_WOMENS"), facts, state)
+    assert got == pytest.approx(0.0)
+
+
+def test_slot_coverage_men_still_matches_mens_possessive(facts):
+    """Tightening to word boundaries must not cost the true positives."""
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    got = slot_coverage(Candidate(asin="B_POPULAR"), facts, state)
+    assert got == pytest.approx(1.0)
+
+
+def test_slot_coverage_term_does_not_match_inside_longer_word(facts):
+    """The collision is general, not a gender special case.
+
+    "red" must not be satisfied by "shredded", so the fix is a boundary
+    rule applied to every slot term rather than a hardcoded gender list.
+    """
+    facts = dict(facts)
+    facts["B_SHREDDED"] = {"dept": "Grocery", "blob": "shredded parmesan cheese"}
+    state = SessionState(session_id="s", slots={"color": "red"})
+    got = slot_coverage(Candidate(asin="B_SHREDDED"), facts, state)
+    assert got == pytest.approx(0.0)
+
+
+def test_slot_coverage_matches_terms_with_non_word_characters(facts):
+    """A term may start or end in punctuation, where a bare \\b flips sense."""
+    facts = dict(facts)
+    facts["B_COTTON"] = {"dept": "Men", "blob": "tee made of 100% cotton, preshrunk"}
+    state = SessionState(session_id="s", slots={"material": "100% cotton"})
+    got = slot_coverage(Candidate(asin="B_COTTON"), facts, state)
+    assert got == pytest.approx(1.0)
+
+
 def test_slot_coverage_flattens_multi_value_slots(facts):
     """A multi-value slot (tuple) is checked term-by-term, not as one blob."""
     state = SessionState(
@@ -463,6 +510,37 @@ def test_category_match_does_not_exclude_on_mismatch(facts):
     got = category_match(Candidate(asin="B_NOPRICE"), facts, state)
     assert got is not None
     assert not math.isnan(got)
+
+
+def test_category_match_mens_does_not_match_womens_path(facts):
+    """A stated "mens" category must not score on a women's category path.
+
+    Same collision as slot_coverage, on the other text feature: "men" is a
+    substring of "womens", so 59.1% of the real catalogue took credit for
+    a token its path does not contain.
+    """
+    facts = dict(facts)
+    facts["B_WOMENS"] = {
+        "cat_path": "clothing, shoes & jewelry > women > clothing > dresses",
+        "blob": "",
+    }
+    for stated in ("mens", "men"):
+        state = SessionState(session_id="s", slots={"category": f"{stated} jacket"})
+        got = category_match(Candidate(asin="B_WOMENS"), facts, state)
+        assert got == pytest.approx(0.0), stated
+
+
+def test_category_match_still_matches_across_singular_and_plural(facts):
+    """Boundary matching must keep the number-insensitivity of the old form."""
+    facts = dict(facts)
+    facts["B_DRESS"] = {
+        "cat_path": "clothing, shoes & jewelry > women > clothing > dresses",
+        "blob": "",
+    }
+    for stated in ("dress", "dresses"):
+        state = SessionState(session_id="s", slots={"category": f"women {stated}"})
+        got = category_match(Candidate(asin="B_DRESS"), facts, state)
+        assert got == pytest.approx(1.0), stated
 
 
 def test_brand_match_uses_store_field(facts):

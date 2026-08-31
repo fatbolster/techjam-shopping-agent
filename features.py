@@ -23,6 +23,7 @@ other way to reach it. See that field's docstring in state.py for why.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from indexes import Indexes
 from state import SessionState
@@ -191,10 +192,16 @@ def category_match(candidate: Candidate, facts: dict[str, dict], state: SessionS
     # category is a multi-word phrase like "women dresses" naming path
     # levels deeper than cat3 ever holds), which is why the fitted weight
     # came out near zero (scripts/report_ranker.py). Each token counts if
-    # it appears in the path directly or as its singular ("dresses" ->
-    # "dress"); score is the matched fraction, so a partially-right
-    # category ("women" matches, "dresses" doesn't) scores between the
-    # extremes instead of collapsing to 0.
+    # it appears in the path as a whole word, in either number ("dresses"
+    # matches a path saying "dress" and vice versa — see _token_pattern);
+    # score is the matched fraction, so a partially-right category
+    # ("women" matches, "dresses" doesn't) scores between the extremes
+    # instead of collapsing to 0.
+    #
+    # Whole-word, because the substring form this replaced had the same
+    # gender collision as slot_coverage: "men" is inside "womens", so
+    # 59.1% of the catalogue took credit for a token it does not contain,
+    # and a stated "mens" category scored full marks on women's products.
     path = record.get("cat_path")
     if not path:
         path = " ".join(
@@ -205,7 +212,7 @@ def category_match(candidate: Candidate, facts: dict[str, dict], state: SessionS
     tokens = [t for t in re.split(r"[^a-z0-9]+", category.strip().lower()) if len(t) >= 3]
     if not tokens:
         return 0.0
-    hits = sum(1 for t in tokens if t in path or t.rstrip("s") in path)
+    hits = sum(1 for t in tokens if _token_pattern(t).search(path) is not None)
     return hits / len(tokens)
 
 
@@ -236,15 +243,96 @@ def brand_match(candidate: Candidate, facts: dict[str, dict], state: SessionStat
     return 1.0 if brand.strip().lower() in store else 0.0
 
 
+@lru_cache(maxsize=8192)
+def _token_pattern(token: str) -> re.Pattern[str]:
+    r"""Compile a category token into a number-insensitive whole-word matcher.
+
+    category_match() compares tokens of the shopper's stated category
+    against the candidate's category path, and needs "dresses" to match a
+    path saying "dress". That used to ride on substring matching (`t in
+    path`, plus a `t.rstrip("s")` singular fallback), which carried the
+    same defect as slot_coverage(): "men" is a substring of "womens", so a
+    stated "mens" category scored full credit on women's products.
+
+    Matching whole words alone would lose the plural handling the
+    substring form gave for free, so the token is expanded to its likely
+    surface forms and the alternation is boundary-matched as a whole. The
+    forms are deliberately naive rather than a real stemmer — the input is
+    a handful of shopper-typed category words, and a wrong form can only
+    fail to match a word that is not in the path anyway.
+
+    Args:
+        token: An already-lowercased category token, 3+ characters.
+
+    Returns:
+        A compiled pattern matching the token, or a number variant of it,
+        only at word boundaries.
+    """
+    forms = {token, token + "s", token + "es"}
+    if token.endswith("es"):
+        forms |= {token[:-1], token[:-2]}
+    elif token.endswith("s"):
+        forms |= {token[:-1]}
+    # Longest first so the pattern reads in the order a human would try
+    # the forms. Correctness does not depend on it — the trailing `(?!\w)`
+    # rejects a short form that is only a prefix of the word in the path
+    # ("sho" inside "shoes"), and the engine backtracks into the longer
+    # alternatives — but it keeps the compiled source legible when
+    # debugging a match.
+    alternation = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    return re.compile(rf"(?<!\w)(?:{alternation})(?!\w)")
+
+
+@lru_cache(maxsize=8192)
+def _term_pattern(term: str) -> re.Pattern[str]:
+    r"""Compile `term` into a word-boundary matcher for blob lookup.
+
+    Slot terms used to be tested with a plain `term in blob` substring
+    check, which silently conflated a term with any longer word that
+    happens to contain it. The department slot is where this bit hardest:
+    lowercased "men" is a substring of "women's", so on the real 50,000-row
+    catalogue 91.4% of blobs contained the substring while only 29.7%
+    contained the word — 30,850 products took full credit on the one
+    feature meant to carry gender, and women's products were rewarded for
+    containing the very word that excludes them.
+
+    The guards are `(?<!\w)`/`(?!\w)` rather than `\b` because a slot
+    value may legitimately begin or end with a non-word character ("100%
+    cotton", "3-pack"), where `\b` flips sense and stops matching. The
+    lookarounds mean "not preceded/followed by a word character", which is
+    the intended test regardless of how the term itself starts and ends.
+
+    Boundaries are asserted on the term as a whole, so a multi-word term
+    ("running shoes") still has to appear as that phrase, and possessives
+    still match: "men" matches "men's" (the apostrophe is not a word
+    character) while rejecting "women's".
+
+    Terms come from a small, slowly-changing slot vocabulary and this is
+    called once per candidate per turn, so the compiled patterns are
+    cached rather than rebuilt on every call.
+
+    Args:
+        term: An already-stripped, already-lowercased slot term.
+
+    Returns:
+        A compiled pattern matching `term` only at word boundaries.
+    """
+    return re.compile(rf"(?<!\w){re.escape(term)}(?!\w)")
+
+
 def slot_coverage(candidate: Candidate, facts: dict[str, dict], state: SessionState) -> float:
     """Fraction of slot terms present in the text blob. §2.3, §3.4 Step 6.
 
     Design doc §2.3: "Attribute matching must therefore operate over text,
     not structured lookup — which makes slot matching a scoring signal
-    rather than a filter." Every value in `state.slots` is checked as a
-    lowercase substring of `facts[asin]["blob"]` (multi-value slots are
-    flattened to their individual terms first); the return is the fraction
-    found.
+    rather than a filter." Every value in `state.slots` is checked against
+    `facts[asin]["blob"]` lowercased (multi-value slots are flattened to
+    their individual terms first); the return is the fraction found.
+
+    The check is word-boundary, not plain substring — see _term_pattern()
+    for why. A substring test made this feature actively anti-informative
+    on gender: it credited every women's product for the "men" inside
+    "women's", which is the opposite of what the department slot is for.
 
     Args:
         candidate: The candidate to score.
@@ -263,7 +351,7 @@ def slot_coverage(candidate: Candidate, facts: dict[str, dict], state: SessionSt
         return 0.0
     record = facts.get(candidate.asin)
     blob = (record.get("blob") or "").lower() if record is not None else ""
-    hits = sum(1 for term in terms if term in blob)
+    hits = sum(1 for term in terms if _term_pattern(term).search(blob) is not None)
     return hits / len(terms)
 
 

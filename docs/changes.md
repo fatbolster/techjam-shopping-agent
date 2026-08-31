@@ -506,6 +506,89 @@ suite: 563 passed, 1 xfailed.
 
 ---
 
+## Change 8 — Word-boundary matching for the two text features
+
+**Files:** `features.py` (`slot_coverage`, `category_match`, two new cached
+pattern helpers) &nbsp;·&nbsp; **Score:** see the paired comparison below —
+this change is **not** credited with a score movement.
+
+**What changed**
+
+Both text features tested slot terms with plain substring containment. Both
+now match on word boundaries:
+
+| Feature | Before | After |
+| :--- | :--- | :--- |
+| `slot_coverage` | `term in blob` | `(?<!\w)term(?!\w)` (`_term_pattern`) |
+| `category_match` | `t in path or t.rstrip("s") in path` | boundary-matched, number variants preserved (`_token_pattern`) |
+
+The guards are `(?<!\w)`/`(?!\w)` rather than `\b` because a slot value may
+begin or end in punctuation ("100% cotton", "3-pack"), where `\b` inverts and
+stops matching. "men" still matches "men's" — an apostrophe is not a word
+character — while rejecting "women's".
+
+**Why it was wrong**
+
+`men` is a substring of `women`. Measured on the real 50,000-row catalogue:
+
+| Feature | Field | Substring hit | Whole-word hit | Falsely credited |
+| :--- | :--- | ---: | ---: | ---: |
+| `slot_coverage` | `blob` | 45,690 (91.4%) | 14,840 (29.7%) | **30,850 (61.7%)** |
+| `category_match` | `cat_path` | 42,026 (84.1%) | 12,456 (24.9%) | **29,570 (59.1%)** |
+
+So on a stated department of "Men", nearly two thirds of the catalogue —
+women's products included — took full credit on the one feature meant to
+carry gender. `category_match` was worse than a plain substring test: its
+`t.rstrip("s")` singular fallback reduced a stated "mens" to "men", which
+then matched "womens".
+
+**Result — measured against a matched control, not against Model 8.0**
+
+A single before/after is not interpretable here (see the Reproducibility
+note). Both arms below start from the same `models/ranker.json` and run the
+identical corpus → refit → evaluate cycle, so they differ only by this change:
+
+| Arm | Hit@10 | MRR | MTTC | Technical score |
+| :--- | ---: | ---: | ---: | ---: |
+| Control — unmodified source, regenerated and refit | 0.850 | 0.5605 | 3.965 | 0.7338 |
+| Change 8 — both features fixed, regenerated and refit | 0.880 | 0.5690 | 3.775 | 0.7552 |
+
+That is **+0.021**, with three of four scenario slices improving (browsing
+0.887→0.925, intent override 0.867→0.900, buying 0.812→0.838; boundary flat).
+**This is inside the ±0.026 refit spread recorded below and is therefore not
+evidence of a score gain.** The justification for this change is correctness,
+which is measured directly in the table above and pinned by regression tests;
+the score is reported only to show it does not regress. A defensible figure
+needs the median of several paired seeds (now possible — see below).
+
+Note the comparison is against **0.7338**, not Model 8.0's 0.7774. Refitting
+the *unmodified* code costs 0.044 on its own, so comparing a refit arm against
+the committed headline would have credited this change with a large movement
+that is entirely draw luck.
+
+**What this does not fix**
+
+Word-boundary matching corrects the feature; it does not fully resolve the
+reported symptom. A "men's jacket" query still returns women's products in the
+top 10, and the residue is legitimate: the surviving matches are genuinely
+unisex listings ("winter gloves for men women", "sunglasses for women men")
+that Amazon files under *Women*, so their blob really does contain the word.
+
+The deeper gap is that **no feature reads the structured department at all**.
+`facts[asin]["dept"]` is 100% populated, but department reaches ranking only
+through the text blob. §2.3's "attribute matching must operate over text" was
+argued from `details.Color` (4.9%) and `details.Material` (4.1%) — department
+is the one attribute that does not share that problem. A `department_match`
+feature scoring `dept` against the department slot would close it, as a lean
+rather than the hard filter Change 2 correctly removed.
+
+**Tests** — six new regression tests in `tests/test_features.py`: "men" vs
+"women's", "men" vs "men's", a non-gender collision ("red" vs "shredded"), a
+punctuation-bearing term, and both directions of category singular/plural.
+Full suite: 572 passed.
+
+---
+
 ## Reproducibility note
 
 `models/` is gitignored, so a clean checkout does **not** contain the fitted
@@ -528,12 +611,38 @@ identical Change 7 source have now been measured:
 | Change 7 draw (matched to the code) | 43.1% | 559 | 0.7511 |
 
 That is a spread of **0.026**, far wider than the ±0.008 previously recorded
-here. The cause is the corpus, not the code: the simulator is stochastic, so
-different draws put the target in the candidate pool at materially different
-rates, and the ranker is fitted on ~200 effective samples (rows within a
-session are not independent). A 12% swing in positive count is enough to flip
-a coefficient sign — `category_match` moved from +1.60 to −0.41 between these
-two fits despite its raw correlation with the label staying positive in both.
+here. The cause is the corpus, not the code: different draws put the target in
+the candidate pool at materially different rates, and the ranker is fitted on
+~200 effective samples (rows within a session are not independent). A 12% swing
+in positive count is enough to flip a coefficient sign — `category_match` moved
+from +1.60 to −0.41 between these two fits despite its raw correlation with the
+label staying positive in both.
+
+**The draw is controlled by `PYTHONHASHSEED`, and pinning it makes the whole
+pipeline reproducible.** This was previously described here as the simulator
+being stochastic. It is not: every RNG in the codebase is explicitly seeded
+(`telemetry.py:169` by `session_id`/`turn`, `evaluator/evaluator.py:211` by
+`sample_id`/`scenario_type`), and no unseeded RNG is reachable from corpus
+generation. The variance is Python's per-process string-hash randomisation
+changing set and dict iteration order, which reaches the corpus through
+tie-breaking. Measured directly, holding source and `models/ranker.json` fixed
+and hashing `data/features.jsonl`:
+
+| Run | Corpus MD5 |
+| :--- | :--- |
+| `PYTHONHASHSEED=0` | `419c508d388a9112c19e9e4e3dca5833` |
+| `PYTHONHASHSEED=0` (repeat) | `419c508d388a9112c19e9e4e3dca5833` |
+| `PYTHONHASHSEED=1` | `d43c419151840bcebc6a30dcb317c807` |
+| `PYTHONHASHSEED=42` | `e83cae2c271ea7d0efed100a5fc8df60` |
+
+Same seed, byte-identical corpus; different seed, different corpus. Two full
+unseeded runs of identical source likewise produced different corpora
+(`fda76cac…` vs `45fa303c…`). The fitting step is already deterministic: refitting
+on a fixed `data/features.jsonl` reproduces byte-identical weights.
+
+So a change can be evaluated against a matched control by running both arms at
+the same `PYTHONHASHSEED` (as Change 8 does), and a defensible headline is the
+median over several seeds rather than a single unseeded draw.
 
 Model 8.0's 0.7774 headline uses the currently fitted `models/ranker.json`,
 which was fitted on the more favourable draw. **A clean clone reproducing from
