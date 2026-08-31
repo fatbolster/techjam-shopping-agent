@@ -1,5 +1,5 @@
 """
-Contract tests for the ten ranking features (design doc §3.4 Step 6).
+Contract tests for the eleven ranking features (design doc §3.4 Step 6).
 
 Every constraint here traces to a measurement in §2 of the design document.
 The comment above each group names the finding it protects.
@@ -44,6 +44,8 @@ from features import (
     rating,
     rating_style_fit,
     slot_coverage,
+    department_match,
+    DEPARTMENT_NEUTRAL,
 )
 from indexes import Indexes
 from state import RARE_TAGS, SessionState
@@ -208,6 +210,72 @@ def test_price_fit_survives_unknown_asin(facts, state_buying):
     """A candidate missing from facts must be treated like a null price."""
     got = price_fit(Candidate(asin="B_DOES_NOT_EXIST"), facts, state_buying)
     assert got == pytest.approx(PRICE_FIT_NEUTRAL)
+
+
+# --------------------------------------------------------------------------
+# department_match — the one structured attribute worth reading directly,
+# and protects Change 2: a non-department bucket is unknown, never wrong
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def dept_facts():
+    return {
+        "B_MEN": {"dept": "Men", "blob": ""},
+        "B_WOMEN": {"dept": "Women", "blob": ""},
+        "B_BUCKET": {"dept": "Boot Shop", "blob": ""},
+        "B_NODEPT": {"dept": None, "blob": ""},
+    }
+
+
+def test_department_match_rewards_the_stated_department(dept_facts):
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    assert department_match(Candidate(asin="B_MEN"), dept_facts, state) == pytest.approx(1.0)
+
+
+def test_department_match_zeroes_the_opposite_department(dept_facts):
+    """The reported bug: a men's query must not be satisfied by women's."""
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    assert department_match(Candidate(asin="B_WOMEN"), dept_facts, state) == pytest.approx(0.0)
+
+
+def test_department_match_is_neutral_for_a_non_department_bucket(dept_facts):
+    """Guards Change 2. `categories[1]` holds 203 values and ~20% are store
+    or product-type buckets; 30 of 200 targets sit under one. Scoring those
+    0 would re-create the department filter as a penalty and lose them."""
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    got = department_match(Candidate(asin="B_BUCKET"), dept_facts, state)
+    assert got == pytest.approx(DEPARTMENT_NEUTRAL)
+    assert got > department_match(Candidate(asin="B_WOMEN"), dept_facts, state)
+
+
+def test_department_match_is_neutral_when_nothing_is_known(dept_facts):
+    state_none = SessionState(session_id="s")
+    assert department_match(Candidate(asin="B_MEN"), dept_facts, state_none) == pytest.approx(DEPARTMENT_NEUTRAL)
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    assert department_match(Candidate(asin="B_NODEPT"), dept_facts, state) == pytest.approx(DEPARTMENT_NEUTRAL)
+    assert department_match(Candidate(asin="B_MISSING"), dept_facts, state) == pytest.approx(DEPARTMENT_NEUTRAL)
+
+
+def test_department_match_is_case_insensitive(dept_facts):
+    state = SessionState(session_id="s", slots={"department": "  men "})
+    assert department_match(Candidate(asin="B_MEN"), dept_facts, state) == pytest.approx(1.0)
+
+
+def test_department_match_separates_unisex_listing_from_slot_coverage(dept_facts):
+    """The residue word boundaries cannot reach.
+
+    A women's listing whose text genuinely says "for men women" scores full
+    slot_coverage on a stated "Men" — correctly, the word is there. Only the
+    structured department tells the two apart.
+    """
+    facts = {"B_UNISEX": {
+        "dept": "Women",
+        "blob": "trendoux winter gloves for men women - upgraded touch screen",
+    }}
+    state = SessionState(session_id="s", slots={"department": "Men"})
+    cand = Candidate(asin="B_UNISEX")
+    assert slot_coverage(cand, facts, state) == pytest.approx(1.0)
+    assert department_match(cand, facts, state) == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------
@@ -561,11 +629,14 @@ def test_brand_match_is_case_insensitive(facts):
 # Owner D's telemetry corpus
 # --------------------------------------------------------------------------
 
-def test_feature_vector_has_ten_features(indexes, state_buying):
+def test_feature_vector_has_one_value_per_feature_name(indexes, state_buying):
     pool = [Candidate(asin="B_POPULAR", bm25_raw=12.0, cos_raw=0.7)]
     vec = feature_vector(pool[0], pool, indexes, state_buying)
-    assert len(vec) == 10
-    assert len(FEATURE_NAMES) == 10
+    assert len(vec) == len(FEATURE_NAMES)
+    # Pinned: the corpus, the fitted ranker's coefficients and telemetry's
+    # rows are all positional in FEATURE_NAMES order, so changing the count
+    # invalidates every persisted model and must be a deliberate edit.
+    assert len(FEATURE_NAMES) == 11
 
 
 def test_feature_vector_order_is_stable(indexes, state_buying):
@@ -596,7 +667,7 @@ def test_feature_vector_survives_popularity_stream_candidate(indexes, state_buyi
     """The whole vector must compute for a candidate no text stream found."""
     pool = [Candidate(asin="B_POPULAR")]
     vec = feature_vector(pool[0], pool, indexes, state_buying)
-    assert len(vec) == 10
+    assert len(vec) == len(FEATURE_NAMES)
     assert all(not math.isnan(v) for v in vec)
 
 
@@ -607,7 +678,7 @@ def test_feature_vector_survives_unknown_asin(indexes, state_buying):
         vec = feature_vector(pool[0], pool, indexes, state_buying)
     except KeyError:
         pytest.fail("feature_vector must handle an asin absent from facts")
-    assert len(vec) == 10
+    assert len(vec) == len(FEATURE_NAMES)
 
 
 def test_extract_features_and_feature_vector_agree(indexes, state_buying):

@@ -1,4 +1,4 @@
-"""The ten ranking features from §3.4 Step 6.
+"""The eleven ranking features from §3.4 Step 6.
 
 Design doc §3.4 Step 6 (Ranking) feature table.
 
@@ -31,7 +31,8 @@ from utils import Candidate, fixture_score
 
 # Order matters: this is the feature vector's column order everywhere
 # (telemetry rows, the fitted regression's coefficients, rank.py's
-# HANDSET_WEIGHTS). §3.4 Step 6: "Ten features."
+# HANDSET_WEIGHTS). §3.4 Step 6 says "Ten features"; department_match is
+# an eleventh, added because no feature read the structured department.
 FEATURE_NAMES: tuple[str, ...] = (
     "bm25_norm",
     "cos_sim",
@@ -40,6 +41,7 @@ FEATURE_NAMES: tuple[str, ...] = (
     "price_fit",
     "category_match",
     "brand_match",
+    "department_match",
     "slot_coverage",
     "rare_tag_match",
     "rating_style_fit",
@@ -243,6 +245,78 @@ def brand_match(candidate: Candidate, facts: dict[str, dict], state: SessionStat
     return 1.0 if brand.strip().lower() in store else 0.0
 
 
+# Department values that are genuinely mutually exclusive, lowercased.
+# `categories[1]` holds 203 distinct values and only these behave like real
+# departments — the rest ("Westlake", "Boot Shop", "Novelty & More") are
+# store or product-type buckets that say nothing about who a product is
+# for. A candidate sitting in one of those is scored neutral rather than
+# wrong, which is the distinction Change 2 got bitten by: 15% of targets
+# live under such a bucket, so treating "not Men" as "not for men" deleted
+# correct products.
+EXCLUSIVE_DEPARTMENTS: frozenset[str] = frozenset(
+    {"men", "women", "girls", "boys", "baby"}
+)
+
+# Returned when the department carries no information either way — no slot
+# stated, no `dept` on the candidate, or a `dept` that is not a real
+# department. Mirrors price_fit's null-safety contract (§2.2, §8.3 step
+# C2: "returns a neutral value for nulls — never excludes").
+DEPARTMENT_NEUTRAL = 0.5
+
+
+def department_match(candidate: Candidate, facts: dict[str, dict], state: SessionState) -> float:
+    """Stated department vs the candidate's own. §3.4 Step 6, §2.3.
+
+    The only structured attribute worth reading directly. §2.3 argues
+    attribute matching must operate over text because the structured
+    fields barely exist — but it measured that on `details.Color` (4.9%)
+    and `details.Material` (4.1%). Department does not share the problem:
+    `categories[1]` is 100% populated, and `build_facts_dict()` already
+    carries it as `dept`. Before this feature existed, department reached
+    ranking only through `slot_coverage`'s text blob, which is why a
+    stated "Men" was satisfied by any women's listing whose description
+    happens to say "for men women" — the text is right and the product is
+    still wrong.
+
+    Three-valued on purpose, and the neutral is the whole point. Scoring a
+    plain 0 for "does not match" would re-create Change 2's department
+    filter as a soft penalty: `categories[1]` holds 203 values of which
+    roughly a fifth are store buckets rather than departments, and 30 of
+    200 targets (15%) sit under one. Those candidates are unknown, not
+    wrong, so they score DEPARTMENT_NEUTRAL and are neither rewarded nor
+    punished. Only a genuine opposite — Men stated, Women filed, both real
+    departments — scores 0.0.
+
+    This leans, it never filters (§3.4: filtering happens upstream in
+    retrieval.py, and Change 2 removed the department filter there for
+    good reason).
+
+    Args:
+        candidate: The candidate to score.
+        facts: Per-ASIN structured facts.
+        state: Current session state.
+
+    Returns:
+        1.0 when the departments agree, 0.0 when they are different real
+        departments, DEPARTMENT_NEUTRAL when either side is unknown or the
+        candidate sits in a non-department bucket.
+    """
+    stated = state.slots.get("department")
+    if not isinstance(stated, str) or not stated.strip():
+        return DEPARTMENT_NEUTRAL
+    record = facts.get(candidate.asin)
+    dept = record.get("dept") if record is not None else None
+    if not isinstance(dept, str) or not dept.strip():
+        return DEPARTMENT_NEUTRAL
+    stated_key = stated.strip().lower()
+    dept_key = dept.strip().lower()
+    if stated_key == dept_key:
+        return 1.0
+    if stated_key in EXCLUSIVE_DEPARTMENTS and dept_key in EXCLUSIVE_DEPARTMENTS:
+        return 0.0
+    return DEPARTMENT_NEUTRAL
+
+
 @lru_cache(maxsize=8192)
 def _token_pattern(token: str) -> re.Pattern[str]:
     r"""Compile a category token into a number-insensitive whole-word matcher.
@@ -429,10 +503,11 @@ def rating_style_fit(candidate: Candidate, facts: dict[str, dict], state: Sessio
 def extract_features(
     candidate: Candidate, pool: list[Candidate], indexes: Indexes, state: SessionState
 ) -> dict[str, float]:
-    """Compute all ten features for one candidate.
+    """Compute all eleven features for one candidate.
 
     Design doc §3.4 Step 6 feature table; §3.4 Step 7 ("the ten feature
-    values per candidate" logged to telemetry).
+    values per candidate" logged to telemetry) — eleven since
+    department_match was added; see FEATURE_NAMES.
 
     Args:
         candidate: The candidate to score.
@@ -452,6 +527,7 @@ def extract_features(
         "price_fit": price_fit(candidate, facts, state),
         "category_match": category_match(candidate, facts, state),
         "brand_match": brand_match(candidate, facts, state),
+        "department_match": department_match(candidate, facts, state),
         "slot_coverage": slot_coverage(candidate, facts, state),
         "rare_tag_match": rare_tag_match(candidate, facts, state),
         "rating_style_fit": rating_style_fit(candidate, facts, state),
@@ -461,7 +537,7 @@ def extract_features(
 def feature_vector(
     candidate: Candidate, pool: list[Candidate], indexes: Indexes, state: SessionState
 ) -> tuple[float, ...]:
-    """Compute all ten features for one candidate, as a fixed-order tuple.
+    """Compute all eleven features for one candidate, as a fixed-order tuple.
 
     Design doc §3.4 Step 6; §8.3 step C2. Same inputs, same per-feature
     values as extract_features() — just shaped as a positional tuple in
@@ -479,7 +555,7 @@ def feature_vector(
         state: Current session state.
 
     Returns:
-        A tuple of ten floats, in FEATURE_NAMES order.
+        A tuple of eleven floats, in FEATURE_NAMES order.
     """
     features = extract_features(candidate, pool, indexes, state)
     return tuple(features[name] for name in FEATURE_NAMES)

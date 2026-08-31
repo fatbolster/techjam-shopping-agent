@@ -58,6 +58,10 @@ HANDSET_WEIGHTS: dict[str, float] = {
     "price_fit": 0.5,
     "category_match": 1.5,
     "brand_match": 1.0,
+    # Same magnitude as the other constraint features. It is a lean, not a
+    # filter: its neutral (0.5) means an unknown department costs nothing,
+    # so the weight only has to separate a real opposite from a real match.
+    "department_match": 1.5,
     "slot_coverage": 1.0,
     "rare_tag_match": 0.5,
     "rating_style_fit": 0.3,
@@ -122,7 +126,7 @@ class FittedRanker:
 def score_candidates(
     candidates: list[Candidate], state: SessionState, indexes: Indexes, weights: Optional[dict[str, float]] = None
 ) -> list[tuple[str, float]]:
-    """Score every candidate as a weighted sum of the ten features.
+    """Score every candidate as a weighted sum of the eleven features.
 
     Design doc §3.4 Step 6; §8.3 step C3. Falls back to HANDSET_WEIGHTS
     when `weights` is None, i.e. before a FittedRanker exists (§7.4

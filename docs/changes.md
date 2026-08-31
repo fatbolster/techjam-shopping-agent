@@ -17,9 +17,16 @@ run artifacts live in `results/`.
 | Our Model 6.0 | 0.825 | 0.518 | 4.20 | 0.680 | 0.7038 | +0.008 |
 | Our Model 7.0 *(state baseline)* | 0.810 | 0.536 | 4.38 | 0.662 | 0.6981 | -0.006 |
 | Model 7.1 retrieval candidate *(not retained)* | 0.815 | 0.536 | 4.22 | 0.679 | 0.7040 | +0.006 |
-| **Our Model 8.0** | **0.900** | **0.599** | **3.62** | **0.738** | **0.7774** | **+0.079** |
+| Our Model 8.0 | 0.900 | 0.599 | 3.62 | 0.738 | 0.7774 | +0.079 |
+| **Our Model 9.0** | **0.880** | **0.560** | **3.70** | **0.731** | **0.7542** | **-0.023** |
 
-Baseline → 8.0 is **+0.671** technical score, a 7.3× improvement.
+Baseline → 9.0 is **+0.648** technical score, a 7.1× improvement.
+
+Model 9.0's headline is **lower than 8.0's, deliberately**. 8.0's 0.7774 came
+from an unusually favourable corpus draw; refitting the *same* 8.0 source at a
+pinned seed scores 0.7599, and 9.0 costs 0.0057 against that matched baseline
+in exchange for fixing the gender bug (Changes 8 and 9 below). The two figures
+are not comparable as a regression: the honest matched pair is 0.7599 → 0.7542.
 
 Each change produces the next version, so the numbering is offset by one:
 Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
@@ -34,7 +41,9 @@ Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
 | Change 5 — Ranker refit on Change 4 corpus | Our Model 6.0 | 0.7038 |
 | Change 6 — Extraction and state repair | Our Model 7.0 *(state baseline)* | 0.6981 |
 | Change 6 retrieval experiment | Model 7.1 candidate *(not retained)* | 0.7040 |
-| Change 7 — Clarification answerability and question order | **Our Model 8.0** | **0.7774** |
+| Change 7 — Clarification answerability and question order | Our Model 8.0 | 0.7774 |
+| Change 8 — Word-boundary text matching | *(folded into 9.0)* | 0.7552 |
+| Change 9 — `department_match`, the eleventh feature | **Our Model 9.0** | **0.7542** |
 
 ### What each metric measures
 
@@ -440,8 +449,7 @@ than retain a public-set threshold that has not demonstrated enough margin.
 
 ## Change 7 — Clarification answerability and question order
 
-**Files:** `clarify.py`, `tests/test_clarify.py`, and
-`results/most_updated_output.json` &nbsp;·&nbsp;
+**Files:** `clarify.py`, `tests/test_clarify.py` &nbsp;·&nbsp;
 **Paired score:** 0.6981 → 0.7639 (**+0.0658**) &nbsp;·&nbsp;
 **Headline (current ranker):** 0.7774 &nbsp;·&nbsp;
 **Decision:** retained
@@ -586,6 +594,104 @@ rather than the hard filter Change 2 correctly removed.
 "women's", "men" vs "men's", a non-gender collision ("red" vs "shredded"), a
 punctuation-bearing term, and both directions of category singular/plural.
 Full suite: 572 passed.
+
+---
+
+## Change 9 — `department_match`, the eleventh ranking feature
+
+**Files:** `features.py` (new feature + two constants), `rank.py`
+(`HANDSET_WEIGHTS`), `tests/test_features.py`, `docs/pipeline.md`
+&nbsp;·&nbsp; **Paired score:** 0.7599 → 0.7542 (**-0.0057**)
+&nbsp;·&nbsp; **Decision:** retained, knowingly, at a small score cost
+
+**What changed**
+
+A new eleventh feature reads the structured department — the first feature to
+read a structured catalogue field rather than text. The vector goes 10 → 11.
+
+It is three-valued, and the neutral is the whole design:
+
+| Candidate's `categories[1]` | Score |
+| :--- | ---: |
+| equals the stated department | 1.0 |
+| a *different real* department (Men stated, Women filed) | 0.0 |
+| a non-department bucket ("Boot Shop", "Westlake"), or either side unknown | 0.5 |
+
+**Why it was needed**
+
+Change 8 fixed the `men`/`women` substring collision but did **not** fix the
+reported symptom, because the residue is not a string-matching problem. A
+"men's jacket" query still returned women's products, and the survivors were
+legitimate text matches: unisex listings ("winter gloves for men women",
+"sunglasses for women men") that Amazon files under *Women*, whose blob really
+does contain the word.
+
+The deeper gap was that **no feature read the structured department at all**.
+§2.3 argues attribute matching must operate over text, but measured that on
+`details.Color` (4.9%) and `details.Material` (4.1%); `categories[1]` is 100%
+populated, so department was never subject to that argument.
+
+The worst offenders were not even text matches. `B07Z6J5N6Y` — *Amazon
+Essentials Women's Cotton Bikini Brief Underwear* — surfaces on a stated
+`department: Men` with `slot_coverage` 0.0, `category_match` 0.0, `bm25_norm`
+0.0 and `cos_sim` 0.0. It arrives through the popularity stream alone and
+rides `pop` = 1.0307 (142,454 ratings, above the 100k normaliser) against the
+model's largest weight. Only a feature that can contradict `pop` moves it.
+
+**Result — the correctness win**
+
+Seven-query probe, share of gendered results in the wrong department, and one
+reported scenario (`department: Men`, scenario buffer "i need something for a
+beach trip", turn 4):
+
+| Configuration | Probe wrong-gender | Beach case, wrong in top 10 | Score |
+| :--- | ---: | ---: | ---: |
+| Before Change 8 | 33.3% | — | — |
+| Change 8 only | 24.6% | 3 of 10 | 0.7599 |
+| **+ `department_match` (shipped)** | **8.6%** | **1 of 10** | **0.7542** |
+
+The one survivor is defensible: *"aqua socks beach water shoes … for women
+men"*, filed under Women, genuinely a beach product.
+
+**The cost, and why it is not avoidable**
+
+Two independent paired cycles at `PYTHONHASHSEED=0` agree on the sign:
+
+| Cycle | Control | + feature | Δ |
+| :--- | ---: | ---: | ---: |
+| 1 — feature inactive during corpus generation | 0.7567 | 0.7527 | -0.0040 |
+| 2 — feature live during corpus generation | 0.7599 | 0.7542 | -0.0057 |
+
+The loss is MRR, not coverage: Hit@10 is flat (0.880 both) and the target
+reaches the pool *more* often with the feature live (550 positives vs 538).
+The feature promotes a band of correctly-gendered products, which MRR
+punishes because it rewards only the one exact target at rank 1.
+
+Two hypotheses for recovering the cost were tested and both failed:
+
+1. *The refit's weight reallocation is the real cost.* Refuted. Holding every
+   other weight at its control-fitted value and bolting the feature on top
+   still costs score, monotonically in the weight — w=0 reproduces the control
+   exactly (0.7599, a harness check), w=1.0 gives 0.7569, w=2.0 gives 0.7550.
+2. *Scoring junk buckets 1.0 instead of 0.5 rescues the 30 bucket targets.*
+   Those targets carry only ~29% of the total rank loss (mean ΔRR -0.041 over
+   30 sessions vs -0.018 over the other 170), so this recovers at best a third
+   of the MRR cost — not enough to change the sign.
+
+Lowering the weight trades the fix away rather than buying it back: at w=1.0
+the probe regresses to 13.2% and the beach case returns to 3 wrong in the top
+10, for 0.0027 of score. There is no free setting.
+
+**Why it ships anyway.** The 0.0057 cost is a fifth of the 0.026 refit spread
+recorded in the reproducibility note below — smaller than the run-to-run
+variance the headline already carries — while the bug it fixes is visible in
+the first seconds of any demo.
+
+**Tests** — six new tests in `tests/test_features.py`, including the case
+word boundaries provably cannot reach: a unisex listing filed under *Women*
+scores `slot_coverage` 1.0 *and* `department_match` 0.0 on a stated "Men".
+The feature-count assertion is pinned at 11 so a future change to the vector
+must be deliberate. Full suite: 578 passed.
 
 ---
 

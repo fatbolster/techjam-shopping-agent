@@ -397,25 +397,34 @@ internally — can never be asked at all.
 
 **`rank(pool, state, indexes, ranker, top_k)`** — `rank.py:369`
 
-Every candidate in the pool gets a ten-dimensional feature vector
-(`features.py:34`, extracted at `features.py:356`):
+Every candidate in the pool gets an eleven-dimensional feature vector
+(`features.py:36`, extracted at `features.py:503`):
 
 | # | Feature | What it reads | Source |
 |---|---|---|---|
-| 1 | `bm25_norm` | `bm25_raw` / pool max — lexical relevance | `features.py:48` |
-| 2 | `cos_sim` | dot product with the canonical query vector | `features.py:72` |
-| 3 | `pop` | `log1p(rating_number) / log1p(1e5)` — purchase-frequency prior | `features.py:90` |
-| 4 | `rating` | `average_rating / 5` | `features.py:110` |
-| 5 | `price_fit` | fit to stated budget; `0.5` neutral when price is null | `features.py:138` |
-| 6 | `category_match` | token-level match against the **full category path** | `features.py:163` |
-| 7 | `brand_match` | `store` vs the `brand` slot | `features.py:213` |
-| 8 | `slot_coverage` | fraction of slot terms present in the text blob | `features.py:240` |
-| 9 | `rare_tag_match` | any of the three profile rare tags present | `features.py:271` |
-| 10 | `rating_style_fit` | `rating/5` when the profile expects high ratings, else 0 | `features.py:308` |
+| 1 | `bm25_norm` | `bm25_raw` / pool max — lexical relevance | `features.py:51` |
+| 2 | `cos_sim` | dot product with the canonical query vector | `features.py:74` |
+| 3 | `pop` | `log1p(rating_number) / log1p(1e5)` — purchase-frequency prior | `features.py:92` |
+| 4 | `rating` | `average_rating / 5` | `features.py:112` |
+| 5 | `price_fit` | fit to stated budget; `0.5` neutral when price is null | `features.py:140` |
+| 6 | `category_match` | whole-word token match against the **full category path** | `features.py:165` |
+| 7 | `brand_match` | `store` vs the `brand` slot | `features.py:221` |
+| 8 | `department_match` | `dept` vs the `department` slot; `0.5` neutral for a non-department bucket | `features.py:267` |
+| 9 | `slot_coverage` | fraction of slot terms present as whole words in the text blob | `features.py:397` |
+| 10 | `rare_tag_match` | any of the three profile rare tags present | `features.py:432` |
+| 11 | `rating_style_fit` | `rating/5` when the profile expects high ratings, else 0 | `features.py:469` |
 
-Features 1–2 carry retrieval signal forward; 3–4 are catalogue priors; 5–8 are
-constraint satisfaction against the slot dictionary; 9–10 are the only place
+Features 1–2 carry retrieval signal forward; 3–4 are catalogue priors; 5–9 are
+constraint satisfaction against the slot dictionary; 10–11 are the only place
 the user profile touches the pipeline.
+
+Feature 8 is the only one reading a structured catalogue field rather than
+text. §2.3 argues attribute matching must operate over text, but measured
+that on `details.Color` (4.9%) and `details.Material` (4.1%); `categories[1]`
+is 100% populated, so department is the exception. It leans and never
+filters — a candidate under one of `categories[1]`'s store buckets
+("Boot Shop") scores the 0.5 neutral, not 0, which is what separates it from
+the department *filter* Change 2 removed.
 
 Scoring is a plain weighted sum (`rank.py:143-149`):
 
@@ -525,7 +534,7 @@ the data structure, not by a subtraction step someone had to remember to write.
 
 ## 4. The second pipeline: how the ranker gets its weights
 
-The ten features are only as good as their weights, and the weights are fitted
+The eleven features are only as good as their weights, and the weights are fitted
 offline from our own logged traffic. This is a separate loop, run before
 evaluation.
 
@@ -729,7 +738,7 @@ one property the override guarantee rests on.
 | `state.py` | slot dict, scenario buffer, canonical render, routing | 1-3 |
 | `retrieval.py` | three streams, union, floor check | 4 |
 | `clarify.py` | entropy x answerability clarification policy | 5 |
-| `features.py` | the ten ranking features | 6 |
+| `features.py` | the eleven ranking features | 6 |
 | `rank.py` | scoring, logistic-regression fit, LLM rerank stub | 6 |
 | `telemetry.py` | append-only JSONL logging, training corpus | 7 |
 | `simulate.py` | user simulator, for corpus generation | offline |
