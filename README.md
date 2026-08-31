@@ -1,4 +1,4 @@
-# Techjam Shopping Agent (Team fatbolster)
+# Bolster Agent (Team fatbolster)
 
 ## Project Overview
 
@@ -17,9 +17,10 @@ mid-session — "actually not black, blue" — by rebuilding its query from a sl
 dictionary rather than decaying an accumulated vector, so a retracted
 constraint is structurally absent rather than mathematically suppressed.
 
-Scores **0.7774** technical score on the 200 public sessions against the
-supplied baseline's 0.1067: Hit Rate@10 0.900, MRR 0.599, MTTC 3.62. Runs
-entirely in memory with zero LLM calls.
+Scores **0.7595** technical score on the 200 public sessions against the
+supplied baseline's 0.1067: Hit Rate@10 0.885, MRR 0.568, MTTC 3.67. The
+fitted ranker is committed, so `make evaluate` reproduces that figure exactly.
+Runs entirely in memory with zero LLM calls.
 
 - Architecture and design rationale — [`docs/pipeline.md`](docs/pipeline.md)
 - Version-by-version changelog and ablations — [`docs/changes.md`](docs/changes.md)
@@ -175,14 +176,16 @@ invisibly on transfer to real users.
 **Limitation 2 — A small, stochastically generated training corpus.**
 No labelled ranking data ships with the task, so the training corpus is
 produced by replaying all 200 sessions through our own user simulator. That
-simulator is stochastic, so each regeneration yields a different corpus: across
-two runs of identical source code, the target appeared in the candidate pool on
-56.5% of turns in one corpus and 43.1% in the other, and the resulting models
-scored 0.7774 and 0.7511. The fit is also thin — eleven parameters against
-roughly 200 effective samples, since turns within a session are not
+corpus depends on `PYTHONHASHSEED`, so each regeneration yields a different
+one: across runs of identical source code, the target appeared in the candidate
+pool on 56.5% of turns in one corpus and 43.1% in another, and the resulting
+models scored 0.7774 and 0.7511. The fit is also thin — eleven parameters
+against roughly 200 effective samples, since turns within a session are not
 independent — which is enough for a feature coefficient to change sign between
-refits. A clean reproduction should therefore expect a score in the 0.75-0.78
-range rather than an exact figure.
+refits. Four seed-pinned reproductions of the current source measured 0.7608,
+0.7486, 0.7281 and 0.7332: median 0.7409, a range of 0.033. This is why the
+fitted ranker is committed — `make evaluate` then reproduces the headline
+exactly, and only a deliberate refit re-enters that range.
 
 **Improvement 2 — Report a distribution, and regularise toward stability.**
 With more time we would quote a median over three to five complete
