@@ -1,7 +1,5 @@
 """Regression tests for high-precision extraction and state repair."""
 
-from copy import deepcopy
-
 import pytest
 
 from extract import (
