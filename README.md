@@ -123,10 +123,12 @@ make reproduce SEED=1          # a different corpus draw
 ```
 
 Refitting does **not** reproduce 0.7723, and is not expected to. The corpus
-depends on `PYTHONHASHSEED`, and four clean-clone refits of this same source
+depends on `PYTHONHASHSEED`: four clean-clone refits of the Model 10.0 source
 measured 0.7608 / 0.7486 / 0.7281 / 0.7332 — median 0.7409, a range of 0.033.
-That band, not any single number in it, is what refitting from scratch yields;
-see the reproducibility note in [`docs/changes.md`](docs/changes.md).
+That band, not any single number in it, is what refitting from scratch yields.
+Model 11.0's sign constraint should narrow it, but that has not been
+re-measured across seeds; see the reproducibility note in
+[`docs/changes.md`](docs/changes.md).
 
 | Run | Score | What it measures |
 |---|---|---|
@@ -182,10 +184,13 @@ pool on 56.5% of turns in one corpus and 43.1% in another, and the resulting
 models scored 0.7774 and 0.7511. The fit is also thin — eleven parameters
 against roughly 200 effective samples, since turns within a session are not
 independent — which is enough for a feature coefficient to change sign between
-refits. Four seed-pinned reproductions of the current source measured 0.7608,
-0.7486, 0.7281 and 0.7332: median 0.7409, a range of 0.033. This is why the
-fitted ranker is committed — `make evaluate` then reproduces the headline
-exactly, and only a deliberate refit re-enters that range.
+refits. Four seed-pinned reproductions of the Model 10.0 source measured
+0.7608, 0.7486, 0.7281 and 0.7332: median 0.7409, a range of 0.033. Model
+11.0's sign constraint removes one cause of that instability — a coefficient
+can no longer flip sign against its own lift — but the range has not been
+re-measured across seeds since. This is why the fitted ranker is committed:
+`make evaluate` reproduces the headline exactly, and only a deliberate refit
+re-enters that range.
 
 **Improvement 2 — Report a distribution, and regularise toward stability.**
 With more time we would quote a median over three to five complete
