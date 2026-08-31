@@ -28,18 +28,18 @@
     "rating_style_fit": 0.4111673874808062,
     "slot_coverage": 0.4206027175764656
   },
-  "intercept": -12.375289745394308,
+  "intercept": -11.78092557566898,
   "weights": {
-    "bm25_norm": 3.748472181986494,
-    "brand_match": 2.893190213741712,
-    "category_match": -0.3068356407274792,
-    "cos_sim": 0.6447343155997661,
-    "department_match": 1.846447687100453,
-    "pop": 8.227219528392544,
-    "price_fit": -0.7698006830602091,
-    "rare_tag_match": -1.5492246021088978,
-    "rating": 2.7100348556581797,
-    "rating_style_fit": -0.45039527178818506,
-    "slot_coverage": 2.5210480298983344
+    "bm25_norm": 3.730830029859195,
+    "brand_match": 2.849023637059093,
+    "category_match": 0.0,
+    "cos_sim": 0.8078878562511709,
+    "department_match": 1.753409303342916,
+    "pop": 8.225110189861603,
+    "price_fit": -0.7633477537697568,
+    "rare_tag_match": 0.0,
+    "rating": 1.8190343767148218,
+    "rating_style_fit": 0.0,
+    "slot_coverage": 2.2638956960140155
   }
 }

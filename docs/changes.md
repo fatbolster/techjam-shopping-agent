@@ -19,9 +19,10 @@ run artifacts live in `results/`.
 | Model 7.1 retrieval candidate *(not retained)* | 0.815 | 0.536 | 4.22 | 0.679 | 0.7040 | +0.006 |
 | Our Model 8.0 | 0.900 | 0.599 | 3.62 | 0.738 | 0.7774 | +0.079 |
 | Our Model 9.0 | 0.880 | 0.560 | 3.70 | 0.731 | 0.7542 | -0.023 |
-| **Our Model 10.0** | **0.885** | **0.568** | **3.67** | **0.734** | **0.7595** | **+0.005** |
+| Our Model 10.0 | 0.885 | 0.568 | 3.67 | 0.734 | 0.7595 | +0.005 |
+| **Our Model 11.0** | **0.895** | **0.588** | **3.58** | **0.741** | **0.7723** | **+0.013** |
 
-Baseline → 10.0 is **+0.653** technical score, a 7.1× improvement.
+Baseline → 11.0 is **+0.666** technical score, a 7.2× improvement.
 
 **Model 10.0's 0.7595 is exactly reproducible.** `models/ranker.json` is now
 committed, and the evaluator is deterministic against a fixed ranker: `make
@@ -54,7 +55,8 @@ Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
 | Change 8 — Word-boundary text matching | *(folded into 9.0)* | 0.7552 |
 | Change 9 — `department_match`, the eleventh feature | Our Model 9.0 | 0.7542 |
 | Change 10 — Clamp `pop` to its documented range | Our Model 10.0 | 0.7595 |
-| Change 11 — Reproducibility: ship the ranker, pin the seed | **Model 10.0, now exact** | **0.7595** |
+| Change 11 — Reproducibility: ship the ranker, pin the seed | Model 10.0, now exact | 0.7595 |
+| Change 12 — Sign-constrained ranker fit | **Our Model 11.0** | **0.7723** |
 
 ### What each metric measures
 
@@ -872,6 +874,85 @@ over logged turns, and a faster-converging agent logs proportionally fewer
 early turns. Separating the two means comparing pool recall at matched turn
 indices. If it is a real regression, recovering it is worth more than every
 change in this document since Model 8.0.
+
+---
+
+## Change 12 — Sign-constrained ranker fit
+
+**Files:** `rank.py` (`_fit_sign_constrained`, `fit_logistic_regression`),
+`tests/test_rank.py` &nbsp;·&nbsp; **Score:** 0.7595 → **0.7723**
+(**+0.0128**) &nbsp;·&nbsp; **Decision:** retained
+
+**What changed**
+
+The fit now constrains each coefficient's sign to agree with that feature's
+own marginal association with the target, measured on the training corpus.
+A feature scoring higher on targets than on non-targets cannot receive a
+negative weight, and vice versa.
+
+sklearn's `LogisticRegression` accepts no such bounds, so the final fit runs
+through `_fit_sign_constrained()` — an L-BFGS-B minimisation of sklearn's
+exact objective (`0.5*||w||² + C*Σ sw·log(1+exp(-z))`, C=1, unpenalised
+intercept, `class_weight="balanced"`). Validated against sklearn: with no
+bounds the two agree to **6e-7** on every coefficient and to nine decimal
+places on the objective. That equivalence is pinned by a test, because if it
+ever drifts, every shipped weight silently comes from a different objective
+than §3.4 documents.
+
+**Why it was wrong**
+
+Three features carried weights contradicting their own data:
+
+| Feature | Mean on targets | Mean on non-targets | Lift | Old weight |
+| :--- | ---: | ---: | ---: | ---: |
+| `category_match` | 0.4917 | 0.2973 | **+0.194** | **-0.31** |
+| `rare_tag_match` | 0.0295 | 0.0071 | +0.022 | -1.55 |
+| `rating_style_fit` | 0.5676 | 0.5565 | +0.011 | -0.45 |
+
+These are suppressor coefficients: with eleven collinear features and ~550
+positives, `slot_coverage` already carries most of the "matches the stated
+slots" signal through text, so `category_match`'s residual variance fits
+negative. Defensible for in-sample likelihood; indefensible as ranking
+behaviour, since it actively demotes products matching the category the
+shopper asked for. It is why `"i need men's jeans"` returned belts and
+Hawaiian shirts.
+
+The constraint pins all three at exactly **0.0** rather than making them
+positive — a boundary solution. That is the honest reading of the training
+data: it supports "these must not count against a product", not "these should
+be rewarded".
+
+**Result**
+
+| Metric | Before | After |
+| :--- | ---: | ---: |
+| Hit Rate@10 | 0.8850 | **0.8950** |
+| MRR | 0.5675 | **0.5876** |
+| MTTC | 3.665 | **3.575** |
+| Held-out average precision | 0.7132 | **0.7227** |
+| **Technical score** | 0.7595 | **0.7723** |
+
+**Why the weight was not simply hand-set.** Sweeping `category_match` by hand
+against the evaluator scores considerably better — 0.7688 at 0.0, 0.7820 at
++1.0, 0.7863 at +2.0, 0.7871 at +3.0, 0.7874 at +4.5, 0.7908 at +6.0. The
+curve **never turns over**, which is the signature of fitting to the 200
+scored sessions rather than finding real signal: the "best" weight is simply
+whichever was tested last. Those numbers are diagnosis, not a shippable
+configuration, and none is used. The constraint above derives its bound
+direction from labels alone and never reads evaluator output.
+
+**What this does not fix.** Zeroing the weight stops the ranker demoting the
+right category; it does not reward it. Measured over ten queries × top 10, the
+share of results matching the stated product type moved only 25% → 28% at turn
+1 and 23% → 25% by turn 3. `"men's watch"` still returns no watches, and
+`"men's winter coat"` no coats. The stated category *is* extracted correctly
+into the slot dictionary — this is a ranking gap, not an extraction one, and
+closing it means giving the ranker a category signal strong enough to matter,
+which the training corpus does not currently support.
+
+**Tests** — the sklearn-equivalence check, plus a fixture with a deliberately
+collinear duplicate feature asserting no positive-lift feature fits negative.
+Full suite: 582 passed.
 
 ---
 

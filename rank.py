@@ -153,6 +153,57 @@ def score_candidates(
     return scored
 
 
+def _fit_sign_constrained(X, y, sample_weight, bounds):
+    """Fit L2 logistic regression with per-coefficient sign bounds.
+
+    Mirrors sklearn's `LogisticRegression(class_weight="balanced",
+    penalty="l2")` objective exactly — 0.5*||w||^2 + C*sum(sw*log(1+exp(-z)))
+    with C=1.0 and an unpenalised intercept — but minimises it with
+    L-BFGS-B, which accepts box bounds where sklearn does not.
+
+    Used to stop the fit assigning a coefficient whose sign contradicts the
+    feature's own marginal association with the target. See
+    fit_logistic_regression()'s docstring for why that happens and why it
+    matters.
+
+    Args:
+        X: Standardised feature matrix, shape (n_samples, n_features).
+        y: Labels in {0, 1}.
+        sample_weight: Per-row weight, as class_weight="balanced" computes.
+        bounds: One (low, high) pair per feature; None either side for
+            unbounded. The intercept is always unbounded.
+
+    Returns:
+        (coef, intercept) in the same standardised space as `X`.
+    """
+    import numpy as np
+    from scipy.optimize import minimize
+
+    n_features = X.shape[1]
+    y_signed = np.where(y == 1, 1.0, -1.0)
+
+    def objective(params):
+        w, b = params[:n_features], params[n_features]
+        z = y_signed * (X @ w + b)
+        # log(1 + exp(-z)), computed stably
+        loss = float(np.sum(sample_weight * np.logaddexp(0.0, -z)) + 0.5 * w @ w)
+        sig = 1.0 / (1.0 + np.exp(z))  # == sigmoid(-z)
+        common = sample_weight * sig * (-y_signed)
+        grad_w = X.T @ common + w
+        grad_b = float(np.sum(common))
+        return loss, np.concatenate([grad_w, [grad_b]])
+
+    result = minimize(
+        objective,
+        x0=np.zeros(n_features + 1),
+        jac=True,
+        method="L-BFGS-B",
+        bounds=list(bounds) + [(None, None)],
+        options={"maxiter": 1000, "ftol": 1e-12, "gtol": 1e-10},
+    )
+    return result.x[:n_features], float(result.x[n_features])
+
+
 def fit_logistic_regression(
     feature_matrix: list[dict[str, float]], labels: list[int], groups: list[str]
 ) -> FittedRanker:
@@ -267,14 +318,41 @@ def fit_logistic_regression(
         if fold_aps:
             cv_ap = sum(fold_aps) / len(fold_aps)
 
-    model = _new_model().fit(X_scaled, y)
+    # Sign constraint, from the training corpus only. A feature whose mean
+    # is higher on targets than on non-targets must not receive a negative
+    # weight, and vice versa. Without this the fit produces suppressor
+    # coefficients: with 11 collinear features and ~550 positives,
+    # category_match measured a clear positive lift (0.492 on targets vs
+    # 0.297 on the rest) yet fitted to -0.31, because slot_coverage already
+    # carries most of the same "matches the stated slots" signal through
+    # text. The negative coefficient is defensible for in-sample likelihood
+    # and indefensible as ranking behaviour: it actively demotes products
+    # matching the category the shopper asked for, which is why a "men's
+    # jeans" query returned belts.
+    #
+    # The bound direction is derived from the labels, never from evaluator
+    # output, so this is a fit constraint and not tuning against the score.
+    # Standardisation scales are positive, so a sign bound in standardised
+    # space is the same sign bound in raw space.
+    pos_mask = y == 1
+    bounds = []
+    for j in range(X_scaled.shape[1]):
+        lift = float(X[pos_mask, j].mean() - X[~pos_mask, j].mean())
+        if lift > 0:
+            bounds.append((0.0, None))
+        elif lift < 0:
+            bounds.append((None, 0.0))
+        else:
+            bounds.append((None, None))
+
+    sample_weight = np.where(pos_mask, len(y) / (2.0 * pos_mask.sum()), len(y) / (2.0 * (~pos_mask).sum()))
+    coef, intercept_scaled = _fit_sign_constrained(X_scaled, y, sample_weight, bounds)
 
     # Fold the scaler into the weights so score_candidates() keeps scoring
     # raw feature values directly: intercept + coef . ((x - mean) / scale)
     # == (intercept - sum(coef * mean / scale)) + sum((coef / scale) * x).
-    coef = model.coef_[0]
     raw_weights = coef / scaler.scale_
-    raw_intercept = float(model.intercept_[0] - np.sum(coef * scaler.mean_ / scaler.scale_))
+    raw_intercept = float(intercept_scaled - np.sum(coef * scaler.mean_ / scaler.scale_))
 
     return FittedRanker(
         weights=dict(zip(FEATURE_NAMES, (float(w) for w in raw_weights))),

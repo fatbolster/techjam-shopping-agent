@@ -17,8 +17,8 @@ mid-session — "actually not black, blue" — by rebuilding its query from a sl
 dictionary rather than decaying an accumulated vector, so a retracted
 constraint is structurally absent rather than mathematically suppressed.
 
-Scores **0.7595** technical score on the 200 public sessions against the
-supplied baseline's 0.1067: Hit Rate@10 0.885, MRR 0.568, MTTC 3.67. The
+Scores **0.7723** technical score on the 200 public sessions against the
+supplied baseline's 0.1067: Hit Rate@10 0.895, MRR 0.588, MTTC 3.58. The
 fitted ranker is committed, so `make evaluate` reproduces that figure exactly.
 Runs entirely in memory with zero LLM calls.
 
@@ -108,7 +108,7 @@ make doctor      # checks the interpreter, dependencies and ranker
 make evaluate    # official evaluator -> results/output.json  (~10 min)
 ```
 
-Expected: **0.7595, exactly.** The evaluator is fully deterministic against a
+Expected: **0.7723, exactly.** The evaluator is fully deterministic against a
 fixed ranker — verified byte-for-byte across two independent clones. If you
 get 0.0, run `make doctor`: a missing dependency makes every turn raise inside
 the evaluator's blanket `except`, which reports a well-formed zero rather than
@@ -122,7 +122,7 @@ make reproduce                 # seed-pinned: corpus -> fit -> evaluate (~20 min
 make reproduce SEED=1          # a different corpus draw
 ```
 
-Refitting does **not** reproduce 0.7595, and is not expected to. The corpus
+Refitting does **not** reproduce 0.7723, and is not expected to. The corpus
 depends on `PYTHONHASHSEED`, and four clean-clone refits of this same source
 measured 0.7608 / 0.7486 / 0.7281 / 0.7332 — median 0.7409, a range of 0.033.
 That band, not any single number in it, is what refitting from scratch yields;
@@ -130,10 +130,10 @@ see the reproducibility note in [`docs/changes.md`](docs/changes.md).
 
 | Run | Score | What it measures |
 |---|---|---|
-| `results/output.json` | **0.7595** | Model 10.0, committed code and committed ranker — reproducible exactly |
+| `results/output.json` | **0.7723** | Model 11.0, committed code and committed ranker — reproducible exactly |
 | `results/baseline.json` | 0.107 | the kit's starter agent |
 
-Earlier reference runs (Models 5.0-9.0) are recorded in `docs/changes.md` and
+Earlier reference runs (Models 5.0-10.0) are recorded in `docs/changes.md` and
 recoverable from git history with `git checkout <rev> -- results/`.
 
 To summarise every run in `results/`:

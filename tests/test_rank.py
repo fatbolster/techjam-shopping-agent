@@ -32,6 +32,7 @@ import pytest
 from features import FEATURE_NAMES
 from indexes import Indexes
 from rank import (
+    _fit_sign_constrained,
     HANDSET_WEIGHTS,
     TOP_K_RETURN,
     TOP_K_TRUNCATE,
@@ -109,6 +110,70 @@ def pool():
 # HANDSET_WEIGHTS — §8.3 step C3: "Constants at module top for single-line
 # tuning."
 # --------------------------------------------------------------------------
+
+def test_fit_never_assigns_a_weight_that_contradicts_the_feature_lift():
+    """A feature scoring higher on targets must not fit to a negative weight.
+
+    With eleven collinear features and few positives, an unconstrained fit
+    produces suppressor coefficients: category_match measured a clear
+    positive lift on the real corpus yet fitted to -0.31, because
+    slot_coverage already carries the same "matches the stated slots"
+    signal through text. That is defensible for in-sample likelihood and
+    indefensible as ranking behaviour -- it demotes products matching the
+    category the shopper asked for.
+    """
+    import random
+
+    rng = random.Random(20240531)
+    rows, labels, groups = [], [], []
+    for session in range(40):
+        for cand in range(20):
+            target = cand == 0
+            # `helper` is pure noise; `signal` is genuinely higher on
+            # targets, and `echo` duplicates it to force collinearity.
+            signal = 1.0 if target else 0.0
+            row = {name: rng.random() * 0.1 for name in FEATURE_NAMES}
+            row["slot_coverage"] = signal + rng.random() * 0.05
+            row["category_match"] = signal * 0.9 + rng.random() * 0.05
+            rows.append(row)
+            labels.append(1 if target else 0)
+            groups.append(f"s{session}")
+
+    ranker = fit_logistic_regression(rows, labels, groups)
+
+    import statistics
+    for name in ("slot_coverage", "category_match"):
+        pos = statistics.mean(r[name] for r, y in zip(rows, labels) if y == 1)
+        neg = statistics.mean(r[name] for r, y in zip(rows, labels) if y == 0)
+        assert pos > neg, f"{name} should have positive lift in this fixture"
+        assert ranker.weights[name] >= 0.0, (
+            f"{name} has positive lift but fitted to {ranker.weights[name]:+.4f}"
+        )
+
+
+def test_sign_constrained_fit_matches_sklearn_when_unbounded():
+    """The bounded optimiser must solve sklearn's own objective.
+
+    Guards the whole constraint: if this diverges, every fitted weight the
+    project ships is coming from a different objective than the one §3.4
+    documents.
+    """
+    numpy = pytest.importorskip("numpy")
+    pytest.importorskip("sklearn")
+    from sklearn.linear_model import LogisticRegression
+
+    rng = numpy.random.default_rng(11)
+    X = rng.normal(size=(400, 4))
+    y = (X[:, 0] + rng.normal(scale=0.5, size=400) > 0).astype(int)
+    pos = y == 1
+    sw = numpy.where(pos, len(y) / (2.0 * pos.sum()), len(y) / (2.0 * (~pos).sum()))
+
+    mine, intercept = _fit_sign_constrained(X, y, sw, [(None, None)] * 4)
+    sk = LogisticRegression(class_weight="balanced", penalty="l2", tol=1e-10, max_iter=5000).fit(X, y)
+
+    assert numpy.abs(sk.coef_[0] - mine).max() < 1e-4
+    assert abs(sk.intercept_[0] - intercept) < 1e-4
+
 
 def test_handset_weights_has_one_entry_per_feature():
     assert set(HANDSET_WEIGHTS) == set(FEATURE_NAMES)
