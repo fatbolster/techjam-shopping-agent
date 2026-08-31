@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A conversational shopping agent for discovery-led commerce, built for TechJam
+A conversational shopping agent for discovery-led commerce, built for TikTok TechJam
 2026 Problem Statement 4.
 
 On platforms where people discover products by scrolling rather than searching,
