@@ -99,28 +99,37 @@ Put `agents/our_agent.py` back into `starter/agent.py` afterwards.
 
 ### Reproducing the headline score
 
-The fitted ranker is not committed (`models/` is gitignored, like all
-generated data), and the agent falls back to hand-set weights without
-it — so a clean clone must fit it before evaluating, or the score will
-come out well below the committed runs:
+The fitted ranker **is** committed (`models/ranker.json`, 1.5KB), so the
+headline reproduces from a clean clone in one command:
 
 ```bash
-python3 -m evaluate            # instrumented corpus -> data/features.jsonl (~10 min)
-python3 scripts/fit_ranker.py  # fit -> models/ranker.json
-make evaluate                  # official evaluator -> results/output.json
+make doctor      # checks the interpreter, dependencies and ranker
+make evaluate    # official evaluator -> results/output.json  (~10 min)
 ```
 
-Expected: technical score **0.75-0.78**. The evaluator itself is fully
-deterministic — a fixed `models/ranker.json` reproduces every metric exactly —
-but the training corpus varies with `PYTHONHASHSEED`, so the fitted ranker
-(and with it the score) varies between clean reproductions. Two refits of
-identical source have measured 0.7511 and 0.7774. Pin the seed
-(`PYTHONHASHSEED=0 python3 -m evaluate`) to reproduce a corpus exactly; see
-the reproducibility note in [`docs/changes.md`](docs/changes.md) for why.
+Expected: **0.7595, exactly.** The evaluator is fully deterministic against a
+fixed ranker — verified byte-for-byte across two independent clones. If you
+get 0.0, run `make doctor`: a missing dependency makes every turn raise inside
+the evaluator's blanket `except`, which reports a well-formed zero rather than
+an error.
+
+To regenerate the training corpus and refit rather than using the committed
+ranker:
+
+```bash
+make reproduce                 # seed-pinned: corpus -> fit -> evaluate (~20 min)
+make reproduce SEED=1          # a different corpus draw
+```
+
+Refitting does **not** reproduce 0.7595, and is not expected to. The corpus
+depends on `PYTHONHASHSEED`, and four clean-clone refits of this same source
+measured 0.7608 / 0.7486 / 0.7281 / 0.7332 — median 0.7409, a range of 0.033.
+That band, not any single number in it, is what refitting from scratch yields;
+see the reproducibility note in [`docs/changes.md`](docs/changes.md).
 
 | Run | Score | What it measures |
 |---|---|---|
-| `results/output.json` | 0.760 | Model 10.0, current code and currently fitted ranker |
+| `results/output.json` | **0.7595** | Model 10.0, committed code and committed ranker — reproducible exactly |
 | `results/baseline.json` | 0.107 | the kit's starter agent |
 
 Earlier reference runs (Models 5.0-9.0) are recorded in `docs/changes.md` and

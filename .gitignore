@@ -9,6 +9,16 @@
 data/
 models/
 
+# ...except the fitted ranker, which is committed. §8.0's rule is about
+# large binaries (catalog.jsonl is 60MB, embeddings.npy 77MB); this is a
+# 1.5KB JSON of eleven coefficients. Committing it is what makes the
+# headline score reproducible: the evaluator is fully deterministic against
+# a fixed ranker, whereas refitting draws a new corpus and lands anywhere in
+# a 0.033-wide band. A clean clone without it silently falls back to
+# hand-set weights and scores well below the headline.
+!models/
+!models/ranker.json
+
 # Python
 __pycache__/
 *.pyc

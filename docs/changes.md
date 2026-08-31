@@ -23,6 +23,13 @@ run artifacts live in `results/`.
 
 Baseline → 10.0 is **+0.653** technical score, a 7.1× improvement.
 
+**Model 10.0's 0.7595 is exactly reproducible.** `models/ranker.json` is now
+committed, and the evaluator is deterministic against a fixed ranker: `make
+evaluate` on a clean clone returns a byte-identical results file. Verified by
+running it in two separate clones — same MD5, `156ea693…`. Every earlier
+headline in this table was a single draw from a ~0.033-wide lottery and could
+not be reproduced on demand; see Change 11.
+
 Models 9.0 and 10.0 read as *lower* than 8.0's 0.7774, which is a corpus-draw
 artefact rather than a regression. 8.0's headline came from an unusually
 favourable draw; refitting the **same 8.0 source** at a pinned seed scores
@@ -46,7 +53,8 @@ Model 1.0 is the initial build, and **Change *N* yields Model *N+1*.0**.
 | Change 7 — Clarification answerability and question order | Our Model 8.0 | 0.7774 |
 | Change 8 — Word-boundary text matching | *(folded into 9.0)* | 0.7552 |
 | Change 9 — `department_match`, the eleventh feature | Our Model 9.0 | 0.7542 |
-| Change 10 — Clamp `pop` to its documented range | **Our Model 10.0** | **0.7595** |
+| Change 10 — Clamp `pop` to its documented range | Our Model 10.0 | 0.7595 |
+| Change 11 — Reproducibility: ship the ranker, pin the seed | **Model 10.0, now exact** | **0.7595** |
 
 ### What each metric measures
 
@@ -765,6 +773,105 @@ department.
 
 **Tests** — two new tests pinning the clamp and confirming ordinary values
 pass through untouched. Full suite: 580 passed.
+
+---
+
+## Change 11 — Reproducibility: ship the ranker, pin the seed, fix `make`
+
+**Files:** `.gitignore`, `Makefile`, `README.md`, `models/ranker.json` (now
+committed) &nbsp;·&nbsp; **Score:** unchanged at **0.7595**, but now exactly
+reproducible instead of a draw from a 0.033-wide band
+
+**The problem**
+
+Every headline in this document was a single sample from a lottery. Four
+clean-clone reproductions of the *same* Model 10.0 source, differing only in
+`PYTHONHASHSEED`:
+
+| Seed | Hit@10 | MRR | Technical score |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.8850 | 0.5729 | 0.7608 |
+| 1 | 0.8700 | 0.5717 | 0.7486 |
+| 2 | 0.8450 | 0.5502 | 0.7281 |
+| 3 | 0.8400 | 0.5772 | 0.7332 |
+
+Median **0.7409**, range **0.0327** — wider than the 0.026 previously recorded
+here. Two consequences worth stating plainly:
+
+- **Seed 0 is the best of the four, not the median.** It was chosen as an
+  obvious default before any of these scores existed, so the paired
+  comparisons in Changes 8-10 are honest — but every absolute number measured
+  at seed 0 sits at the top of the band, not the middle.
+- **A clean clone does not reach 0.75-0.78.** That range, claimed in the
+  README, came from runs that started corpus generation from an *existing*
+  fitted ranker, which bootstraps a better corpus. A genuine clean clone,
+  fitting from hand-set weights as the README instructed, lands at 0.73-0.76.
+
+**The fix: commit the fitted ranker**
+
+`models/ranker.json` is 1,499 bytes. §8.0's "never commit large binaries"
+rule was written for `catalog.jsonl` (60MB) and `embeddings.npy` (77MB); a
+JSON file of eleven coefficients is not that, and `models/` is now
+`.gitignore`d with an explicit exception for it.
+
+This removes the lottery entirely. The evaluator is fully deterministic
+against a fixed ranker, so `make evaluate` on a clean clone reproduces
+**0.7595** exactly — verified byte-for-byte across two independent clones
+(MD5 `156ea693…` both). Nothing needs refitting to confirm the headline, and
+the reported number is the number a reader gets.
+
+Refitting remains available (`make reproduce`) for anyone who wants to
+regenerate the corpus, and is seed-pinned so it too is reproducible.
+
+**A silent 0.0 in `make evaluate`**
+
+Found while verifying the above, and the most serious issue here. The
+Makefile invoked bare `python3`. Where that resolves to a system interpreter
+with `numpy` but without `sentence_transformers` — an ordinary state if the
+venv is not activated — the failure is invisible:
+
+```
+Agent constructed OK                       <- loads precomputed embeddings.npy
+respond RAISED ModuleNotFoundError: sentence_transformers
+                                           <- swallowed at evaluator.py:241
+score 0.0000, mttc 11.0                    <- well-formed JSON, no traceback
+```
+
+`Agent()` constructs because the embedding matrix is precomputed; only
+`embed_text()` needs the missing package, and it is called inside
+`respond()`, which the evaluator wraps in a blanket `except Exception`. The
+result is a clean run reporting a perfect zero. Anyone following the README
+without activating the venv would conclude the agent does not work.
+
+Fixed by preferring `.venv/bin/python` automatically when it exists, and by
+adding `make doctor`, which fails loudly on a missing dependency or absent
+ranker rather than letting either become a silent zero.
+
+**Why the old 0.7774 was higher — it is the training corpus, not the code**
+
+The still-quoted 0.7774 came from a ranker fitted on a materially richer
+corpus than anything produced since:
+
+| Corpus the ranker was fitted on | Target in pool | Positives | Score |
+| :--- | ---: | ---: | ---: |
+| Pre-Change-7 draw (the 0.7774 ranker) | 56.5% | 632 | 0.7774 |
+| Change 7 draw | 43.1% | 559 | 0.7511 |
+| Model 10.0, four seeds | 44.1-45.5% | 589-607 | 0.7281-0.7608 |
+
+Positives are the only signal the ranker learns the target from, and the
+pre-Change-7 corpus had roughly 12 points more pool recall. Fitted on ~200
+effective samples, that difference moves the model. So 0.7774 does not
+reflect a better *agent*; it reflects a ranker trained on better *data*,
+which the pipeline has not reproduced since.
+
+**Open question, deliberately not answered here.** Whether that pool-recall
+drop (56.5% → ~44%) is a retrieval regression introduced in Changes 6-7, or
+an accounting artefact of those changes converging sooner and so logging a
+different mix of turns, has not been determined. `pool_recall` is averaged
+over logged turns, and a faster-converging agent logs proportionally fewer
+early turns. Separating the two means comparing pool recall at matched turn
+indices. If it is a real regression, recovering it is worth more than every
+change in this document since Model 8.0.
 
 ---
 
